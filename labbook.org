@@ -1,0 +1,308 @@
+* Learning from nvJPEG example 
+
+** Initialization 
+
+#+begin_src C++
+struct decode_params_t {
+  std::string input_dir;
+  int batch_size;
+  int total_images;
+  int dev;
+  int warmup;
+
+  nvjpegJpegState_t nvjpeg_state;
+  nvjpegHandle_t nvjpeg_handle;
+  cudaStream_t stream;
+
+  // used with decoupled API
+  nvjpegJpegState_t nvjpeg_decoupled_state;
+  nvjpegBufferPinned_t pinned_buffers[2]; // 2 buffers for pipelining
+  nvjpegBufferDevice_t device_buffer;
+  nvjpegJpegStream_t  jpeg_streams[2]; //  2 streams for pipelining
+  nvjpegDecodeParams_t nvjpeg_decode_params;
+  nvjpegJpegDecoder_t nvjpeg_decoder;
+
+  nvjpegOutputFormat_t fmt;
+  bool write_decoded;
+  std::string output_dir;
+
+  bool hw_decode_available;
+};
+
+
+int dev_malloc(void **p, size_t s) {
+ return (int)cudaMalloc(p, s); 
+}
+
+int dev_free(void *p) { 
+  return (int)cudaFree(p); 
+}
+
+int host_malloc(void** p, size_t s, unsigned int f) {
+  return (int)cudaHostAlloc(p, s, f);
+}
+
+int host_free(void* p) { 
+  return (int)cudaFreeHost(p); 
+}
+
+// On MAIN:
+
+nvjpegDevAllocator_t dev_allocator = {&dev_malloc, &dev_free};
+nvjpegPinnedAllocator_t pinned_allocator ={&host_malloc, &host_free};
+
+#+end_src
+
+** nvjpegCreateEx
+
+#+begin_src C++
+
+nvjpegStatus_t status = nvjpegCreateEx(
+  NVJPEG_BACKEND_HARDWARE, 
+  &dev_allocator,
+  &pinned_allocator,
+  NVJPEG_FLAGS_DEFAULT,  
+  &params.nvjpeg_handle);
+
+#+end_src
+
+DOC: https://docs.nvidia.com/cuda/nvjpeg/index.html#nvjpeg-create-ex
+Description: Allocates and initializes the library handle using the provided arguments. 
+
+#+begin_src C++
+nvjpegStatus_t nvjpegCreateEx(
+          nvjpegBackend_t backend, 
+          nvjpegDevAllocator_t *dev_allocator, 
+          nvjpegPinnedAllocator_t *pinned_allocator, 
+          unsigned int flags,
+          nvjpegHandle_t *handle);
+#+end_src
+
+*** nvjpegBackend_t backend 
+- https://docs.nvidia.com/cuda/nvjpeg/index.html#nvjpeg-backend
+
+| Member                    | Description                                                                      |
+|---------------------------+----------------------------------------------------------------------------------|
+| NVJPEG_BACKEND_DEFAULT    | Back-end is selected internally                                                  |
+| NVJPEG_BACKEND_HYBRID     | Uses CPU for Huffman decoding                                                    |
+| NVJPEG_BACKEND_GPU_HYBRID | Uses GPU for Huffman decoding. GPU assisted Huffman decoding for batchsize > 100 |
+| NVJPEG_BACKEND_HARDWARE   | Uses Hardware Acceleration for decode.*                                          |
+|---------------------------+----------------------------------------------------------------------------------|
+*Supports baseline JPEG images with single scan with 1 or 3 channels. 410 and 411 chroma subsamplings are not supported. 
+
+*** nvjpegDevAllocator_t *dev_allocator
+- Device memory allocator.
+
+#+begin_src C++
+// Allocate memory on the device. 
+int dev_malloc(void **p, size_t s) {
+ return (int)cudaMalloc(p, s); 
+// p - Pointer to allocated device memory 
+// s - Requested allocation size in bytes
+
+}
+#+end_src
+
+*** nvjpegPinnedAllocator_t *pinned_allocator
+DOC: 
+Description: Pinned host memory allocator.
+
+When the nvjpegPinnedAllocator_t *allocator parameter in the nvjpegCreateEx() function is set as a pointer to the above nvjpegPinnedAllocator_t structure, then this structure will be used for allocating and releasing host pinned memory for copying data to/from device. The function prototypes for the memory allocation and memory freeing functions are similar to the cudaHostAlloc() and cudaFreeHost() functions. They will return 0 in case of success, and non-zero otherwise.
+
+However, if the nvjpegPinnedAllocator_t *allocator parameter in the nvjpegCreateEx() function is set to NULL, then the default memory allocation functions cudaHostAlloc() and cudaFreeHost() will be used. When using nvjpegCreate() or nvjpegCreateSimple() function to create library handle, the default host pinned memory allocator will be used. 
+
+#+begin_src C++
+// Allocates page-locked memory on the host.
+//  pHost     - Device pointer to allocated memory 
+//  size    - Requested allocation size in bytes 
+//  flags    - Requested properties of allocated memory
+
+int host_malloc(void** p, size_t s, unsigned int f) {
+  return (int)cudaHostAlloc(p, s, f);
+  
+}
+#+end_src
+
+*** unsigned int flags
+DOC: https://docs.nvidia.com/cuda/nvjpeg/index.html#nvjpeg-flags
+| Member                                        | Description                                                       |
+|-----------------------------------------------+-------------------------------------------------------------------|
+| NVJPEG_FLAGS_DEFAULT                          | Corresponds to default library behavior                           |
+| NVJPEG_FLAGS_HW_DECODE_NO_PIPELINE            | To be used with NVJPEG_BACKEND_HARDWARE.                          |
+| NVJPEG_FLAGS_ENABLE_MEMORY_POOLS [Deprecated] | Starting with CUDA 11.1 this flag will be ignored                 |
+| NVJPEG_FLAGS_BITSTREAM_STRICT                 | nvJPEG library will try to decode a bitstream not in JPEG format. |
+|-----------------------------------------------+-------------------------------------------------------------------|
+
+*** nvjpegHandle_t *handle
+The library handle.
+#+begin_src C++
+// Can be initialize with:
+nvjpegHandle_t nvjpeg_handle;
+#+end_src
+
+** nvjpegJpegStateCreate
+Description: Allocates and initializes the internal structure required for the JPEG processing. 
+DOC: https://docs.nvidia.com/cuda/nvjpeg/index.html#nvjpegJpegStateCreate
+
+#+begin_src C++
+nvjpegStatus_t nvjpegJpegStateCreate(
+	nvjpegHandle_t      handle,
+	nvjpegJpegState_t   *jpeg_handle);
+#+end_src
+
+Params: 
+nvjpegHandle_t - Input - The library handle.
+nvjpegJpegState_t - Input/Output - The image state handle.
+
+Returns:
+nvjpegStatus_t - An error code. One of the following:
+#+begin_src C++
+ NVJPEG_STATUS_SUCCESS = 0,
+ NVJPEG_STATUS_NOT_INITIALIZED = 1,
+ NVJPEG_STATUS_INVALID_PARAMETER = 2,
+ NVJPEG_STATUS_BAD_JPEG = 3,
+ NVJPEG_STATUS_JPEG_NOT_SUPPORTED = 4,
+ NVJPEG_STATUS_ALLOCATOR_FAILURE = 5,
+ NVJPEG_STATUS_EXECUTION_FAILED = 6,
+ NVJPEG_STATUS_ARCH_MISMATCH = 7,
+ NVJPEG_STATUS_INTERNAL_ERROR = 8,
+ NVJPEG_STATUS_IMPLEMENTATION_NOT_SUPPORTED = 9
+#+end_src
+
+** nvjpegDecoderCreate
+Description: Creates a decoder handle. 
+DOC: https://docs.nvidia.com/cuda/nvjpeg/index.html#nvjpeg-decoder-create
+
+#+begin_src C++
+nvjpegStatus_t nvjpegDecoderCreate(
+	nvjpegHandle_t nvjpeg_handle, 
+	nvjpegBackend_t implementation, 
+	nvjpegJpegDecoder_t* decoder_handle);
+#+end_src
+
+Params:
+
+nvjpegHandle_t nvjpeg_handle - Input - Library handle.
+nvjpegBackend_t backend - Input - Backend parameter for the decoder_handle.
+nvjpegJpegDecoder_t decoder_handle - Input/Output - Decoder state handle.
+
+Returns:
+
+nvjpegStatus_t - An error code.
+#+begin_src C++
+NVJPEG_STATUS_SUCCESS = 0,
+ NVJPEG_STATUS_NOT_INITIALIZED = 1,
+ NVJPEG_STATUS_INVALID_PARAMETER = 2,
+ NVJPEG_STATUS_BAD_JPEG = 3,
+ NVJPEG_STATUS_JPEG_NOT_SUPPORTED = 4,
+ NVJPEG_STATUS_ALLOCATOR_FAILURE = 5,
+ NVJPEG_STATUS_EXECUTION_FAILED = 6,
+ NVJPEG_STATUS_ARCH_MISMATCH = 7,
+ NVJPEG_STATUS_INTERNAL_ERROR = 8,
+ NVJPEG_STATUS_IMPLEMENTATION_NOT_SUPPORTED = 9
+#+end_src
+
+
+** nvjpegDecoderStateCreate
+Description: Creates the decoder_state internal structure. 
+The decoder_state is associated with the nvjpegBackend_t implementation that was used to create the decoder_handle. 
+DOC: https://docs.nvidia.com/cuda/nvjpeg/index.html#nvjpeg-decoder-state-create
+
+#+begin_src C++
+nvjpegStatus_t nvjpegDecoderStateCreate(
+	nvjpegHandle_t nvjpeg_handle,
+	nvjpegJpegDecoder_t decoder_handle,
+	nvjpegJpegState_t* decoder_state);
+#+end_src
+
+Params: 
+nvjpegHandle_t nvjpeg_handle 	Input 	Host 	Library handle.
+nvjpegJpegDecoder_t decoder_handle 	Input 	Host 	Decoder handle.
+nvjpegJpegState_t* decoder_state 	Input/Output 	Host 	nvJPEG Image State Handle.
+
+Return:
+nvjpegStatus_t - An error code as specified in nvJPEG API Return Codes. 
+
+** nvjpegBufferPinnedCreate
+Creates a pinned buffer handle. 
+
+#+begin_src C++
+nvjpegStatus_t nvjpegBufferPinnedCreate(
+	nvjpegHandle_t handle, 
+	nvjpegPinnedAllocator_t* pinned_allocator,
+	nvjpegBufferPinned_t* buffer);
+#+end_src
+Parameters:
+Parameter 	Input / Output 	Memory 	Description
+nvjpegHandle_t handle 	Input 	Host 	Library handle.
+nvjpegPinnedAllocator_t* pinned_allocator 	Input 	Host 	Pinned host memory allocator. See nvjpegPinnedAllocator_t structure description.
+nvjpegBufferPinned_t* buffer 	Input/Output 	Host 	nvJPEG pinned buffer object.
+
+OBS: However, if the nvjpegPinnedAllocator_t *allocator parameter in the
+nvjpegCreateEx() function is set to NULL, then the default memory allocation
+functions cudaHostAlloc() and cudaFreeHost() will be used 
+
+Returns:
+nvjpegStatus_t - An error code as specified in nvJPEG API Return Codes. 
+
+** nvjpegBufferDeviceCreate
+Creates the device buffer handle. 
+Signature:
+
+#+begin_src C++
+nvjpegStatus_t nvjpegBufferDeviceCreate(
+	nvjpegHandle_t handle, 
+	nvjpegDevAllocator_t* device_allocator,
+	nvjpegBufferDevice_t* buffer);
+#+end_src
+
+Parameters:
+Parameter 	Input / Output 	Memory 	Description
+nvjpegHandle_t handle 	Input 	Host 	Library handle.
+nvjpegDevAllocator_t* device_allocator 	Input 	Host 	Device memory allocator. See nvjpegDevAllocator_t structure description.
+nvjpegBufferDevice_t* buffer 	Input/Output 	Host 	nvJPEG device buffer container.
+
+Returns:
+
+nvjpegStatus_t - An error code as specified in nvJPEG API Return Codes. 
+** nvjpegJpegStreamCreate
+Creates jpeg_stream that is used to parse the JPEG bitstream and store bitstream parameters.
+
+Signature:
+
+#+begin_src C++
+nvjpegStatus_t nvjpegJpegStreamCreate(
+	nvjpegHandle_t handle, 
+	nvjpegJpegStream_t *jpeg_stream);
+#+end_src	
+
+Parameters:
+Parameter 	Input / Output 	Memory 	Description
+nvjpegHandle_t handle 	Input 	Host 	Library handle
+nvjpegJpegStream_t *jpeg_stream 	Input 	Host 	Bitstream handle
+
+Returns:
+
+nvjpegStatus_t - An error code as specified in nvJPEG API Return Codes.
+
+
+** nvjpegDecodeParamsCreate
+Creates a handle for the parameters. 
+The parameters that can be programmed include: output format, ROI decode, CMYK to RGB conversion.
+
+Signature:
+
+#+begin_src C++
+nvjpegStatus_t nvjpegDecodeParamsCreate(
+	nvjpegHandle_t handle, 
+	nvjpegDecodeParams_t *decode_params);
+#+end_src
+
+Parameters:
+Parameter 	Input / Output 	Memory 	Description
+nvjpegHandle_t handle 	Input 	Host 	Library handle.
+nvjpegDecodeParams_t *decode_params 	Input/Output 	Host 	Decode output parameters.
+
+Returns:
+
+nvjpegStatus_t - An error code as specified in nvJPEG API Return Codes. 
