@@ -197,6 +197,7 @@ __global__ void Metric_Calculator(nvjpegImage_t *image)
 }
 
 __global__ void my_kernel(unsigned char* red, unsigned char* green, unsigned char* blue){
+  printf("-- Hello from kernel --\n");
   printf("cor: %d-%d-%d\n", (int)red[0], (int)green[0], (int)blue[0]);
 }
 
@@ -319,7 +320,11 @@ int decode_images(const FileData &img_data, const std::vector<size_t> &img_len,
 
 
   //   Metric_Calculator<<<1, 1>>>(&otherdecode_output[0]);
-   my_kernel<<<1,1>>>(img_info.channel[0], img_info.channel[1], img_info.channel[2]);
+   my_kernel<<<1,1>>>(
+     otherdecode_output[0].channel[0],
+     otherdecode_output[0].channel[1],
+     otherdecode_output[0].channel[2]);
+
    cudaDeviceSynchronize();
    
   return EXIT_SUCCESS;

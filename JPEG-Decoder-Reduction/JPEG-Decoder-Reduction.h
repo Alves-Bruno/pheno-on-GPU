@@ -12,6 +12,7 @@
 #endif
 #include <dirent.h>  
 #include <sys/stat.h>
+#include <cuda.h>
 #include <sys/types.h>
 
 
