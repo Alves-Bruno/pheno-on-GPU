@@ -1,3 +1,14 @@
+* Download phenovisr
+Download this branch: https://github.com/Alves-Bruno/phenovisr/tree/cpu_gpu_tests
+
+* Adjust gencode on CMakeLists.txt
+Configure the gencode on the CMakeLists.txt
+#+begin_src bash
+# For hype4:
+#SET(CMAKE_CUDA_FLAGS "-gencode arch=compute_37,code=sm_37")
+# For tupi1:
+SET(CMAKE_CUDA_FLAGS "-gencode arch=compute_61,code=sm_61")
+#+end_src
 * Learning from nvJPEG example 
 
 ** Initialization 
@@ -202,7 +213,6 @@ NVJPEG_STATUS_SUCCESS = 0,
  NVJPEG_STATUS_IMPLEMENTATION_NOT_SUPPORTED = 9
 #+end_src
 
-
 ** nvjpegDecoderStateCreate
 Description: Creates the decoder_state internal structure. 
 The decoder_state is associated with the nvjpegBackend_t implementation that was used to create the decoder_handle. 
@@ -285,7 +295,6 @@ Returns:
 
 nvjpegStatus_t - An error code as specified in nvJPEG API Return Codes.
 
-
 ** nvjpegDecodeParamsCreate
 Creates a handle for the parameters. 
 The parameters that can be programmed include: output format, ROI decode, CMYK to RGB conversion.
@@ -306,3 +315,156 @@ nvjpegDecodeParams_t *decode_params 	Input/Output 	Host 	Decode output parameter
 Returns:
 
 nvjpegStatus_t - An error code as specified in nvJPEG API Return Codes. 
+
+* CPU performance test
+#+begin_src R :results output :exports both :session *R*
+library(phenovisr)
+library(tidyverse)
+
+in_parallel <- function(data, cores = NA) {
+
+  suppressMessages(library(phenovisr))
+  suppressMessages(library(parallel))
+#  suppressMessages(library(tidyverse))
+
+  read_it <- function(tib) {
+    
+      phenovis_rgb_mean(tib$image.name) %>%
+      return()
+  }
+
+  numCores <- ifelse(
+    (is.na(cores) || cores < 1),
+    detectCores(),
+    as.numeric(cores)
+  )
+  if (numCores > 1) {
+    # This splits the original data frame in 'numCores' chunks.
+    splitData <- split(data, (0:nrow(data) %/% ceiling(nrow(data)/numCores))) %>%
+      unname
+    splitData <- splitData[lapply(splitData, nrow) > 0]
+    return (
+      splitData %>%
+        #group_by(Mask, Mask.Path) %>%
+        mclapply(read_it, mc.cores = numCores) %>%
+        bind_rows
+    )
+  } else {
+    return (data %>% read_it)
+  }
+}
+
+#list.files(
+#    path="/home/users/bsalves/Cerrado/ePhenology_phenocam_PEG_2013-2020/2015/",
+#    pattern=".jpg",
+#    full.names=TRUE) %>%
+#    as_tibble() %>%
+#    rename(image.name = value) -> images
+
+list.files(
+    path="/tmp/ePhenology_phenocam_CORE_2011-2020",
+    pattern=".jpg",
+    recursive=TRUE,
+    full.names=TRUE) %>%
+    as_tibble() %>%
+    rename(image.name = value) -> images
+
+system("sudo /sbin/sysctl vm.drop_caches=3") 
+
+images %>%
+#    sample_n(20) %>%
+    slice(1:20) %>%
+    in_parallel(cores=1) %>%
+    mutate(decode_time = as.double(decode_time), metric_time = as.double(metric_time)) %>%
+    select(contains("time")) %>%
+    print %>%
+    summarise(
+#      fread_time.avg = mean(fread_time) / 1000,
+      decode_time.avg = mean(decode_time) / 1000,
+      metric_time.avg = mean(metric_time) / 1000
+    )
+
+#%>%
+#    as.data.frame()
+
+#+end_src
+
+#+RESULTS:
+#+begin_example
+vm.drop_caches = 3
+   decode_time metric_time
+1        11401        5271
+2         6869        5169
+3         7262        5215
+4         6753        5051
+5         5953        5046
+6         6529        5182
+7         6134        5026
+8         5929        5026
+9         7698        5026
+10        6284        5026
+11        6634        5080
+12        6796        5027
+13        7030        5029
+14        6754        5026
+15        6550        5038
+16        6906        5033
+17        5779        5031
+18        6144        5052
+19        6932        5143
+20        6789        5047
+  decode_time.avg metric_time.avg
+1          6.8563          5.0772
+#+end_example
+* GPU performance test
+** Build program
+#+begin_src bash
+cd nesi-example
+mkdir build; cd build; cmake ..; make; cd ..
+# To run
+./build/nvjpegDecoder x.jpg
+#+end_src
+** Run test
+#+begin_src R :results output :exports both :session *R*
+library(tidyverse)
+
+list.files(
+    path="/tmp/ePhenology_phenocam_CORE_2011-2020",
+    pattern=".jpg",
+    recursive=TRUE,
+    full.names=TRUE) %>%
+    as_tibble() %>%
+    rename(image.name = value) -> images
+
+program <- "/home/users/bsalves/CUDA/nesi-example/build/nvjpegDecoder"
+
+images %>%
+  slice(1:200) %>%
+  mutate(cmd = paste0(program, " ", image.name)) %>%
+  rowwise() %>%
+  mutate(run.output = system(cmd, intern=TRUE)) %>%
+  mutate(run.output.split = strsplit(run.output, ", ")) %>%
+#  select(starts_with("run")) %>% 
+#  as.data.frame()
+  mutate(
+    fread_time = as.double(run.output.split[2]),
+    decode_time = as.double(run.output.split[3]),
+    metric_time = as.double(run.output.split[4]),
+  ) %>%
+  select(-starts_with("run.")) %>%
+  #print %>%  
+  ungroup() %>%
+  summarise(
+    fread_time.avg = mean(fread_time) / 1000,
+    decode_time.avg = mean(decode_time) / 1000,
+    metric_time.avg = mean(metric_time) / 1000
+  )
+#+end_src
+
+#+RESULTS:
+: # A tibble: 1 x 3
+:   fread_time.avg decode_time.avg metric_time.avg
+:            <
+:           <
+:           <dbl>
+: 1          0.974            164.           0.143

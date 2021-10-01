@@ -47,6 +47,9 @@ int main(int argc, char *argv[]){
   nvjpegJpegState_t jpeg_handle;
   nvjpegJpegStateCreate(handle, &jpeg_handle);
 
+  nvjpegDecodeBatchedInitialize(handle, jpeg_handle,
+                                1, 1, NVJPEG_OUTPUT_RGB)
+
   int nComponents, widths[NVJPEG_MAX_COMPONENT], heights[NVJPEG_MAX_COMPONENT];
   nvjpegChromaSubsampling_t   subsampling;
   nvjpegGetImageInfo(handle, jpg, size, &nComponents, &subsampling, widths, heights);
@@ -58,16 +61,30 @@ int main(int argc, char *argv[]){
     img_info.pitch[i] = widths[0];
     cudaMalloc((void**)&img_info.channel[i], widths[0]*heights[0]);
   }
+
+  /*
   nvjpegDecode(handle, jpeg_handle, jpg, size,
   	NVJPEG_OUTPUT_RGB,
   	&img_info,
+  	0);*/
+
+  unsigned char **input_images = (unsigned char**) malloc(1 * sizeof(unsigened char *));
+  input_images[0] = jpg;
+  nvjpegImage_t out_buffer[1];
+//  out_buffer[0] = 
+  
+  nvjpegDecodeBatched(handle, jpeg_handle, input_images, size,
+  	NVJPEG_OUTPUT_RGB,
+  	out_buffer,
   	0);
+
+
   //printf("%p %p %p\n", &img_info, img_info.pitch, img_info.channel[0]);
 
   cudaDeviceSynchronize();
   std::chrono::_V2::system_clock::time_point end_decode = std::chrono::high_resolution_clock::now();
 
-  /*  unsigned char *red_char_host = (unsigned char*) malloc(sizeof(unsigned char) * (widths[0]*heights[0]));
+   /*  unsigned char *red_char_host = (unsigned char*) malloc(sizeof(unsigned char) * (widths[0]*heights[0]));
   cudaError_t copy_err = cudaMemcpy((void*)red_char_host, (void*)img_info.channel[0], (widths[0]*heights[0]) * sizeof(unsigned char), cudaMemcpyDeviceToHost);
   //cudaDeviceSynchronize();
   
@@ -82,6 +99,8 @@ int main(int argc, char *argv[]){
     }*/
 
   std::chrono::_V2::system_clock::time_point start_calc = std::chrono::high_resolution_clock::now();
+
+  /*
   int channel_sum[3];
   for(int i=0; i<3; i++){
     
@@ -94,7 +113,8 @@ int main(int argc, char *argv[]){
       thrust::plus<int>()); // reduce operation
     
   }
-  cudaDeviceSynchronize();
+  cudaDeviceSynchronize();*/
+  
   std::chrono::_V2::system_clock::time_point end_calc = std::chrono::high_resolution_clock::now();
   
   //  for(int i=0; i<3; i++){
