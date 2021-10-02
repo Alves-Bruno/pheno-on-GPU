@@ -1,0 +1,40 @@
+* CPU/GPU decode performance 
+
+This repository contains the files used to evaluate the CPU/GPU jpeg image decode performance.
+
+** CPU Decode Example
+
+To build the example:
+
+#+begin_src bash
+cd CPU-decode; make
+#+end_src
+
+Run the CPU decode with the x.jpg as input:
+#+begin_src bash
+cd CPU-decode
+./cpu-decode x.jpg 
+#+end_src
+
+
+** GPU Decode Example 
+
+Set the *-gencode* argument on [[file:GPU-decode/CMakeLists.txt][CMakeLists]] before the build. 
+You can check the gpu architectures/virtual device architectures supported by the compiler with the following command:
+
+#+begin_src bash
+nvcc --list-gpu-code --list-gpu-arch
+#+end_src
+
+To build it:
+
+#+begin_src bash
+cd GPU-decode; mkdir build; cd build; cmake ..; make; cd ..
+#+end_src
+ 
+To run:
+
+#+begin_src bash
+cd GPU-decode; ./build/nvjpegDecoder x.jpg
+#+end_src
+
