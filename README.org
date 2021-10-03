@@ -13,7 +13,7 @@ cd CPU-decode; make
 Run the CPU decode with the x.jpg as input:
 #+begin_src bash
 cd CPU-decode
-./cpu-decode x.jpg 
+./cpu-decode <dir_with_jpg_rgb_images> <number_of_images_to_decode> 
 #+end_src
 
 
@@ -35,6 +35,9 @@ cd GPU-decode; mkdir build; cd build; cmake ..; make; cd ..
 To run:
 
 #+begin_src bash
-cd GPU-decode; ./build/nvjpegDecoder x.jpg
+cd GPU-decode
+# To run this example the following condition must be TRUE:
+# number_of_images % batch_size == 0 
+./build/nvjpegDecoder <dir_with_jpg_rgb_images> <batch_size> <number_of_images_to_decode> 
 #+end_src
 

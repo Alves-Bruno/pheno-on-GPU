@@ -4,6 +4,7 @@
 #include <cuda.h>
 #include <cuda_runtime_api.h>
 #include <nvjpeg.h>
+#include <vector>
 
 #include <thrust/host_vector.h>
 #include <thrust/device_vector.h>
@@ -19,84 +20,244 @@
 
 #include <chrono> // To record times
 
-__global__ void my_kernel(unsigned char* copy, unsigned char* red, unsigned char* green, unsigned char* blue){
-  copy[0] = red[0];
-  copy[1] = green[0];
-  copy[2] = blue[0];
+#include <dirent.h>  
+#include <sys/stat.h>
+#include <sys/types.h>
 
-  printf("cor: %d-%d-%d\n", (int)red[0], (int)green[0], (int)blue[0]);
+#include <cstdlib>
+
+int readInput(const std::string &sInputPath, std::vector<std::string> &filelist)
+{
+    int error_code = 1;
+    struct stat s;
+
+    if( stat(sInputPath.c_str(), &s) == 0 )
+    {
+        if( s.st_mode & S_IFREG )
+        {
+            filelist.push_back(sInputPath);
+        }
+        else if( s.st_mode & S_IFDIR )
+        {
+            // processing each file in directory
+            DIR *dir_handle;
+            struct dirent *dir;
+            dir_handle = opendir(sInputPath.c_str());
+            std::vector<std::string> filenames;
+            if (dir_handle)
+            {
+                error_code = 0;
+                while ((dir = readdir(dir_handle)) != NULL)
+                {
+                    if (dir->d_type == DT_REG)
+                    {
+                        std::string sFileName = sInputPath + dir->d_name;
+                        filelist.push_back(sFileName);
+                    }
+                    else if (dir->d_type == DT_DIR)
+                    {
+                        std::string sname = dir->d_name;
+                        if (sname != "." && sname != "..")
+                        {
+                            readInput(sInputPath + sname + "/", filelist);
+                        }
+                    }
+                }
+                closedir(dir_handle);
+            }
+            else
+            {
+                std::cout << "Cannot open input directory: " << sInputPath << std::endl;
+                return error_code;
+            }
+        }
+        else
+        {
+            std::cout << "Cannot open input: " << sInputPath << std::endl;
+            return error_code;
+        }
+    }
+    else
+    {
+        std::cout << "Cannot find input path " << sInputPath << std::endl;
+        return error_code;
+    }
+
+    return 0;
 }
 
+void malloc_check(void *ptr, const char *message){
+  if(ptr == NULL){
+    std::cout << "Could not malloc [" << ptr << "]" << std::endl;
+    exit(1);
+  }
+}
 int main(int argc, char *argv[]){
 
-  std::chrono::_V2::system_clock::time_point start_fread = std::chrono::high_resolution_clock::now();
+  if(argc < 4){
+    std::cout << "Usage: " << argv[0] <<
+      " <images_dir> <batch_size> <number_of_images>" << std::endl;
+    exit(1);
+  }
+  std::vector<std::string> input_images_names;
+  const std::string images_path = argv[1];
 
-  FILE* file = fopen(argv[1], "rb");
-  fseek(file, 0, SEEK_END);
-  unsigned long size=ftell(file);
+  int batch_size = atoi(argv[2]);
+  int total_images = atoi(argv[3]);
+  //std::cout << "batch_size: " << batch_size << ", total_images: " << total_images << std::endl;
+  
+  // Read images at path
+  readInput(images_path, input_images_names);
 
-  unsigned char* jpg = (unsigned char*)malloc(size * sizeof(char));
-  fseek(file, 0, 0);
-  fread(jpg, size, 1, file);
+  if(total_images > input_images_names.size())
+    total_images = input_images_names.size();
 
-  std::chrono::_V2::system_clock::time_point end_fread = std::chrono::high_resolution_clock::now();
+  if(batch_size > total_images)
+    batch_size = total_images;
+    
+  // Memory allocation 
+  unsigned char **input_images_buffer = (unsigned char**) malloc(total_images * sizeof(unsigned char *));
+  malloc_check((void*) input_images_buffer, "input_images_buffer");
+  size_t *input_images_buffer_sizes = (size_t*) malloc(total_images * sizeof(size_t));
+  malloc_check((void*)input_images_buffer_sizes, "input_images_buffer_sizes");
 
-  std::chrono::_V2::system_clock::time_point start_decode = std::chrono::high_resolution_clock::now();
+  auto start_fread = std::chrono::high_resolution_clock::now();
+  for(int i = 0; i < total_images; i++){
+    //std::cout << i << " " << input_images_names[i] << std::endl;
+    FILE* file = fopen(input_images_names[i].c_str(), "rb");
+    fseek(file, 0, SEEK_END);
+    unsigned long size=ftell(file);
+
+    unsigned char* jpg = (unsigned char*)malloc(size * sizeof(char));
+    malloc_check((void*) jpg, "jpg");
+    fseek(file, 0, 0);
+    fread(jpg, size, 1, file);
+
+    fclose(file);
+    //free(file);
+
+    input_images_buffer[i] = jpg;
+    input_images_buffer_sizes[i] = (size_t) size;
+  }
+  auto end_fread = std::chrono::high_resolution_clock::now();
+
+  //  std::cout << "GPU starts" << std::endl;
+  
   nvjpegHandle_t handle;
   nvjpegCreateSimple(&handle);
   nvjpegJpegState_t jpeg_handle;
   nvjpegJpegStateCreate(handle, &jpeg_handle);
 
   nvjpegDecodeBatchedInitialize(handle, jpeg_handle,
-                                1, 1, NVJPEG_OUTPUT_RGB);
+                                batch_size, 1, NVJPEG_OUTPUT_RGB);
 
-  int nComponents, widths[NVJPEG_MAX_COMPONENT], heights[NVJPEG_MAX_COMPONENT];
-  nvjpegChromaSubsampling_t   subsampling;
-  nvjpegGetImageInfo(handle, jpg, size, &nComponents, &subsampling, widths, heights);
-  //  for(int i=0; i<nComponents; i++){
-  //  printf("%d: %d %d\n", i, widths[i], heights[i]);
-  //}
+  int n_rounds = total_images / batch_size;
+  nvjpegImage_t **dest_handle = (nvjpegImage_t**) malloc(n_rounds * sizeof(nvjpegImage_t*));
+  malloc_check((void*)dest_handle, "dest_handle");
 
-  /*
-  nvjpegDecode(handle, jpeg_handle, jpg, size,
-  	NVJPEG_OUTPUT_RGB,
-  	&img_info,
-  	0);*/
+  int *considered_pixels = (int*) malloc(sizeof(int) * total_images);
 
-  unsigned char **input_images = (unsigned char**) malloc(1 * sizeof(unsigned char *));
-  input_images[0] = jpg;
+  int round_i = 0;
+  for(int b_start = 0; b_start < total_images; b_start += batch_size){
 
-  nvjpegImage_t img_info;
-  for(int i=0; i<3; i++){
-    img_info.pitch[i] = widths[0];
-    cudaMalloc((void**)&img_info.channel[i], widths[0]*heights[0]);
-  }    
-  
-/*  nvjpegStatus_t nvjpegDecodeBatched(
- 	nvjpegHandle_t             handle,
- 	nvjpegJpegState_t          jpeg_handle,
- 	const unsigned char *const *data,
- 	const size_t               *lengths, 
- 	nvjpegImage_t              *destinations,
- 	cudaStream_t               stream);*/
-  size_t file_sizes[1];
-  file_sizes[0] = size;
-  nvjpegDecodeBatched(
-        handle,
-	jpeg_handle,
-	input_images,
-        file_sizes,
-  	&img_info,
-  	0);
+    // Malloc the output buffer
+    nvjpegImage_t *destinations = (nvjpegImage_t*) malloc(batch_size * sizeof(nvjpegImage_t));
+    malloc_check((void*) destinations, "destinations");
+    int dest_i = 0;
+    for(int i = b_start; i < b_start + batch_size; i++){
+      int nComponents, widths[NVJPEG_MAX_COMPONENT], heights[NVJPEG_MAX_COMPONENT];
+      nvjpegChromaSubsampling_t subsampling;
+      nvjpegGetImageInfo(
+			 handle,
+			 input_images_buffer[i],
+			 input_images_buffer_sizes[i],
+			 &nComponents, &subsampling, widths, heights);
+      
+      nvjpegImage_t img_info;
+      for(int c=0; c<3; c++){
+	img_info.pitch[c] = widths[0];
+	cudaMalloc((void**)&img_info.channel[c], widths[0]*heights[0]);
+      }
 
+      considered_pixels[i] = widths[0]*heights[0];
+      destinations[dest_i] = img_info;
+      dest_i++;
+    }
+    
+    dest_handle[round_i] = destinations;
+    round_i++;
 
-  //printf("%p %p %p\n", &img_info, img_info.pitch, img_info.channel[0]);
+  }
 
+  cudaStream_t *streams = (cudaStream_t*) malloc(n_rounds * sizeof(cudaStream_t));
+  auto start_decode = std::chrono::high_resolution_clock::now();
+  round_i = 0;
+  for(int b_start = 0; b_start < total_images; b_start += batch_size){
+
+    cudaStreamCreateWithFlags(&streams[round_i], cudaStreamNonBlocking);
+    nvjpegDecodeBatched(
+			handle,
+			jpeg_handle,
+			&input_images_buffer[b_start],
+			&input_images_buffer_sizes[b_start],
+			dest_handle[round_i],
+			streams[round_i]);
+
+    round_i++;
+  }
   cudaDeviceSynchronize();
-  std::chrono::_V2::system_clock::time_point end_decode = std::chrono::high_resolution_clock::now();
+  auto end_decode = std::chrono::high_resolution_clock::now();
 
+  auto start_calc = std::chrono::high_resolution_clock::now();
+  int *channel_avg = (int *) malloc(total_images * 3 * sizeof(int));
+  for(int i = 0; i < total_images; i++){
+    for(int c=0; c<3; c++){
+
+      //      std::cout << c << " " << i/batch_size << " " << i%batch_size << std::endl;
+      //printf("[%d, %d]: dest_handle[%d][%d]\n", i, c,  i/batch_size,  i%batch_size);
+      thrust::device_ptr<unsigned char> channel((unsigned char*) dest_handle[i/batch_size][i%batch_size].channel[c]);
+      
+      channel_avg[(i*3) + c] = thrust::reduce(
+          channel, // Vector start
+	  channel + considered_pixels[i], // Vector end 
+	  (int) 0, // reduce first value
+	  thrust::plus<int>()); // reduce operation
+
+      //std::cout << "AVG: " << channel_avg[(i*3) + c] / (float) considered_pixels[i] << std::endl;
+    }
+  }
+  cudaDeviceSynchronize();
+  auto end_calc = std::chrono::high_resolution_clock::now();
+  
+  double fread_time = std::chrono::duration_cast<std::chrono::microseconds>(end_fread - start_fread).count();
+  double decode_time = std::chrono::duration_cast<std::chrono::microseconds>(end_decode - start_decode).count();
+  double calc_time = std::chrono::duration_cast<std::chrono::microseconds>(end_calc - start_calc).count();
+  //  printf("fread_time, decode_time, fread_time.by_image, decode_time.by_image\n");
+  printf("%lf, %lf, %lf, %lf, %lf, %lf\n",
+	 fread_time,
+	 decode_time,
+	 calc_time,
+	 fread_time / (float)total_images,
+	 decode_time / (float)total_images,
+	 calc_time / (float)total_images
+	 );
+  
+  // Free all the stuff
+  for(int i = 0; i < total_images; i++){
+    free(input_images_buffer[i]);
+  }
+  free(input_images_buffer);
+  free(input_images_buffer_sizes);
+  for(int i = 0; i < n_rounds; i++){
+    free(dest_handle[i]);
+    cudaStreamDestroy(streams[i]);
+  }
+  free(dest_handle);
+  free(considered_pixels);
+  
+  /*
   unsigned char *red_char_host = (unsigned char*) malloc(sizeof(unsigned char) * (widths[0]*heights[0]));
-  cudaError_t copy_err = cudaMemcpy((void*)red_char_host, (void*)img_info.channel[0], (widths[0]*heights[0]) * sizeof(unsigned char), cudaMemcpyDeviceToHost);
+  cudaError_t copy_err = cudaMemcpy((void*)red_char_host, (void*)destinations[0].channel[0], (widths[0]*heights[0]) * sizeof(unsigned char), cudaMemcpyDeviceToHost);
   //cudaDeviceSynchronize();
   
   if (copy_err == cudaSuccess){
@@ -107,10 +268,12 @@ int main(int argc, char *argv[]){
       sum_check += (int) red_char_host[i];
     }
     printf("RED SUM CHECK: %d\n", sum_check);
+    printf("RED SUM CHECK: %f\n", sum_check / (float)(widths[0]*heights[0]));
+    
     }
-
-  std::chrono::_V2::system_clock::time_point start_calc = std::chrono::high_resolution_clock::now();
-
+  */
+    
+  /*
   int channel_sum[3];
   for(int i=0; i<3; i++){
     
@@ -125,17 +288,17 @@ int main(int argc, char *argv[]){
     
   }
   cudaDeviceSynchronize();
-  
-  std::chrono::_V2::system_clock::time_point end_calc = std::chrono::high_resolution_clock::now();
-  
-  //  for(int i=0; i<3; i++){
-  //  printf("Channel[%d] sum: %d\n", i, channel_sum[i]);
-  //  printf("Channel[%d] avg: %f\n", i, channel_sum[i] / (float)(widths[0]*heights[0]));
-  //}
+    
+  for(int i=0; i<3; i++){
+    printf("Channel[%d] sum: %d\n", i, channel_sum[i]);
+    printf("Channel[%d] avg: %f\n", i, channel_sum[i] / (float)(widths[0]*heights[0]));
+  }
 
   double fread_time = std::chrono::duration_cast<std::chrono::microseconds>(end_fread - start_fread).count();
   double decode_time = std::chrono::duration_cast<std::chrono::microseconds>(end_decode - start_decode).count();
   double calc_time = std::chrono::duration_cast<std::chrono::microseconds>(end_calc - start_calc).count();
 
   printf("%s, %lf, %lf, %lf\n", argv[1], fread_time, decode_time, calc_time);
+  */
+  
 }
