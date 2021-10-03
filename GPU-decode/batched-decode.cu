@@ -176,7 +176,10 @@ int main(int argc, char *argv[]){
       nvjpegImage_t img_info;
       for(int c=0; c<3; c++){
 	img_info.pitch[c] = widths[0];
-	cudaMalloc((void**)&img_info.channel[c], widths[0]*heights[0]);
+	if(cudaMalloc((void**)&img_info.channel[c], widths[0]*heights[0]) != cudaSuccess){
+	  std::cout << "CudaMalloc error" << std::endl;
+	  exit(1);
+	}
       }
 
       considered_pixels[i] = widths[0]*heights[0];
