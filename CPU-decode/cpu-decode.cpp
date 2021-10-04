@@ -17,10 +17,16 @@
 #include <cstdlib>
 
 typedef struct {
-    double r;       // a fraction between 0 and 1
-    double g;       // a fraction between 0 and 1
-    double b;       // a fraction between 0 and 1
+    unsigned char r;       // a fraction between 0 and 1
+    unsigned char g;       // a fraction between 0 and 1
+    unsigned char b;       // a fraction between 0 and 1
 } rgb;
+
+typedef struct {
+    int r;       // a fraction between 0 and 1
+    int g;       // a fraction between 0 and 1
+    int b;       // a fraction between 0 and 1
+} rgb_sum;
 
 rgb get_rgb_for_pixel_256(int pixel, image_t *image) {
   unsigned char *iimage = image->image;
@@ -28,11 +34,11 @@ rgb get_rgb_for_pixel_256(int pixel, image_t *image) {
   unsigned char g = iimage[pixel + 1];
   unsigned char b = iimage[pixel + 2];
 
-  rgb RGB = {(double)r, (double)g, (double)b};
+  rgb RGB = {r, g, b};
   return RGB;
 }
 
-std::vector<rgb> phenovis_rgb_mean(
+std::vector<rgb_sum> phenovis_rgb_mean(
     std::vector<std::string> images,
     int total_images,
     double *total_decode_time, double *total_calc_time)
@@ -40,7 +46,7 @@ std::vector<rgb> phenovis_rgb_mean(
 
   // names is a vector to keep image names
   std::vector<std::string> names;
-  std::vector<rgb> avg_values;
+  std::vector<rgb_sum> sum_values;
 
   //  double total_calc_time = 0;
   //  double total_decode_time = 0;
@@ -61,25 +67,27 @@ std::vector<rgb> phenovis_rgb_mean(
 
       auto start_calc = std::chrono::high_resolution_clock::now();
 
-      double count_pixels = 0;
-      double r_sum = 0;
-      double g_sum = 0;
-      double b_sum = 0;
+      int count_pixels = 0;
+      
+      rgb_sum rgb_sum_;
+      rgb_sum_.r = 0;
+      rgb_sum_.g = 0;
+      rgb_sum_.b = 0;
       
     // For every pixel...
       for (int p = 0; p < image->size; p += 3) {
 
         rgb RGB = get_rgb_for_pixel_256(p, image);
-        r_sum += RGB.r;
-        g_sum += RGB.g;
-        b_sum += RGB.b;
+        rgb_sum_.r += RGB.r;
+        rgb_sum_.g += RGB.g;
+        rgb_sum_.b += RGB.b;
         count_pixels += 1;
 
       }
        
-      double r_avg = r_sum / (float) count_pixels;
-      double g_avg = g_sum / (float) count_pixels;
-      double b_avg = b_sum / (float) count_pixels;
+      //double r_avg = r_sum / (float) count_pixels;
+      //double g_avg = g_sum / (float) count_pixels;
+      //double b_avg = b_sum / (float) count_pixels;
 
       auto end_calc = std::chrono::high_resolution_clock::now();
       double calc_time = std::chrono::duration_cast<std::chrono::microseconds>(end_calc - start_calc).count();
@@ -89,11 +97,8 @@ std::vector<rgb> phenovis_rgb_mean(
 
       // Push back the image names
       names.push_back(images[i]);
-      rgb rgb_avg;
-      rgb_avg.r = r_avg;
-      rgb_avg.g = g_avg;
-      rgb_avg.b = b_avg;
-      avg_values.push_back(rgb_avg);
+
+      sum_values.push_back(rgb_sum_);
       
       //Free the image data
       free(image->image);
@@ -101,7 +106,7 @@ std::vector<rgb> phenovis_rgb_mean(
   }
 
   
-  return(avg_values);
+  return(sum_values);
 
 }
 
@@ -184,7 +189,7 @@ int main(int argc, char **argv){
 
   double total_calc_time = 0;
   double total_decode_time = 0;
-  phenovis_rgb_mean(input_images_names, total_images, &total_decode_time, &total_calc_time);
+  std::vector<rgb_sum> sum_values = phenovis_rgb_mean(input_images_names, total_images, &total_decode_time, &total_calc_time);
 
   //printf("decode_time, calc_time, decode_time.by_image, calc_time.by_image\n");
   printf("%lf, %lf, %lf, %lf\n",
@@ -192,6 +197,9 @@ int main(int argc, char **argv){
 	 total_calc_time,
 	 total_decode_time / (float)total_images,
 	 total_calc_time / (float)total_images);
+
+  //printf("[%d]: R %d, G %d, B %d\n", 0, sum_values[0].r, sum_values[0].g, sum_values[0].b);
+  //printf("[%d]: R %d, G %d, B %d\n", total_images - 1, sum_values[total_images -1].r, sum_values[total_images-1].g, sum_values[total_images-1].b);
   
 }
 

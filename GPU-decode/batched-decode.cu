@@ -244,6 +244,11 @@ int main(int argc, char *argv[]){
 	 decode_time / (float)total_images,
 	 calc_time / (float)total_images
 	 );
+
+  //int image_i = 0;
+  //printf("[%d] R %d G %d B %d\n", image_i, channel_avg[(image_i*3) + 0], channel_avg[(image_i*3) + 1], channel_avg[(image_i*3) + 2]);
+  //image_i = total_images - 1;
+  //printf("[%d] R %d G %d B %d\n", image_i, channel_avg[(image_i*3) + 0], channel_avg[(image_i*3) + 1], channel_avg[(image_i*3) + 2]);
   
   // Free all the stuff
   for(int i = 0; i < total_images; i++){
