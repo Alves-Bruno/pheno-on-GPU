@@ -94,9 +94,9 @@ void malloc_check(void *ptr, const char *message){
 }
 int main(int argc, char *argv[]){
 
-  if(argc < 4){
+  if(argc < 5){
     std::cout << "Usage: " << argv[0] <<
-      " <images_dir> <batch_size> <number_of_images>" << std::endl;
+      " <images_dir> <batch_size> <number_of_images> <number_of_streams>" << std::endl;
     exit(1);
   }
   std::vector<std::string> input_images_names;
@@ -104,6 +104,7 @@ int main(int argc, char *argv[]){
 
   int batch_size = atoi(argv[2]);
   int total_images = atoi(argv[3]);
+  int n_streams = atoi(argv[4]);
   //std::cout << "batch_size: " << batch_size << ", total_images: " << total_images << std::endl;
   
   // Read images at path
@@ -195,27 +196,34 @@ int main(int argc, char *argv[]){
 
   }
 
-  cudaStream_t *streams = (cudaStream_t*) malloc(n_rounds * sizeof(cudaStream_t));
-  std::vector<double> decode_times;
+  
+  cudaStream_t *streams = (cudaStream_t*) malloc(n_streams * sizeof(cudaStream_t));
   round_i = 0;
+  int stream_to_use = 0;
+
+  auto start_decode = std::chrono::high_resolution_clock::now();
   for(int b_start = 0; b_start < total_images; b_start += batch_size){
 
-    auto start_decode = std::chrono::high_resolution_clock::now();
+    if(stream_to_use >= n_streams){
+      stream_to_use = 0;
+    }
+
 
     //cudaEvent_t startEvent = NULL, stopEvent = NULL;
     //cudaEventCreate(&startEvent, cudaEventBlockingSync);
     //cudaEventCreate(&stopEvent, cudaEventBlockingSync);
    
-    cudaStreamCreateWithFlags(&streams[round_i], cudaStreamNonBlocking);
+    cudaStreamCreateWithFlags(&streams[stream_to_use], cudaStreamNonBlocking);
     //cudaEventRecord(startEvent, streams[round_i]);
-      
+
+    cudaStreamSynchronize(streams[stream_to_use]);
     nvjpegDecodeBatched(
 			handle,
 			jpeg_handle,
 			&input_images_buffer[b_start],
 			&input_images_buffer_sizes[b_start],
 			dest_handle[round_i],
-			streams[round_i]);
+			streams[stream_to_use]);
 
 
     //float loopTime = 0;
@@ -224,16 +232,16 @@ int main(int argc, char *argv[]){
     //cudaEventElapsedTime(&loopTime, startEvent, stopEvent);
     //double decode_time_i = static_cast<double>(loopTime);
 
-    cudaStreamSynchronize(streams[round_i]);
-    auto end_decode = std::chrono::high_resolution_clock::now();
-    double decode_time_i = std::chrono::duration_cast<std::chrono::microseconds>(end_decode - start_decode).count();
-
-    decode_times.push_back(decode_time_i);
+    //cudaStreamSynchronize(streams[stream_to_use]);
 
     round_i++;
+    stream_to_use++;
 
   }
   cudaDeviceSynchronize();
+  auto end_decode = std::chrono::high_resolution_clock::now();
+  double decode_time = std::chrono::duration_cast<std::chrono::microseconds>(end_decode - start_decode).count();
+
   
 
   std::vector<double> calc_times;
@@ -260,7 +268,11 @@ int main(int argc, char *argv[]){
       calc_times.push_back(calc_time_i);
     }
   }
-  
+
+
+  printf("decode_time\n");
+  printf("%lf\n", decode_time);
+
   //  double decode_time = std::chrono::duration_cast<std::chrono::microseconds>(end_decode - start_decode).count();
   
   //  printf("fread_time, decode_time, fread_time.by_image, decode_time.by_image\n");
@@ -274,6 +286,8 @@ int main(int argc, char *argv[]){
 	 calc_time / (float)total_images
 	 );
   */
+
+  /*
   std::cout << "decode_time, fread_time, calc.time.R, calc.time.G, calc.time.B" << std::endl;
 
   int batch_i = -1;
@@ -289,6 +303,7 @@ int main(int argc, char *argv[]){
     printf("%lf, %lf, %lf, %lf\n",
 	   fread_times[i], calc_times[(i * 3) + 0], calc_times[(i * 3) + 1], calc_times[(i * 3) + 2]);
   }
+  */
 
   //int image_i = 0;
   //printf("[%d] R %d G %d B %d\n", image_i, channel_avg[(image_i*3) + 0], channel_avg[(image_i*3) + 1], channel_avg[(image_i*3) + 2]);
@@ -303,10 +318,14 @@ int main(int argc, char *argv[]){
   free(input_images_buffer_sizes);
   for(int i = 0; i < n_rounds; i++){
     free(dest_handle[i]);
-    cudaStreamDestroy(streams[i]);
+    //cudaStreamDestroy(streams[i]);
   }
   free(dest_handle);
   free(considered_pixels);
+
+  for(int i = 0; i < n_streams; i++){
+    cudaStreamDestroy(streams[i]);
+  }
   
   /*
   unsigned char *red_char_host = (unsigned char*) malloc(sizeof(unsigned char) * (widths[0]*heights[0]));
