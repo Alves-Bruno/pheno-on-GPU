@@ -196,8 +196,10 @@ int main(int argc, char *argv[]){
 
   }
 
-  
   cudaStream_t *streams = (cudaStream_t*) malloc(n_streams * sizeof(cudaStream_t));
+  for(int i=0; i< n_streams; i++){
+    cudaStreamCreateWithFlags(&streams[i], cudaStreamNonBlocking);
+  }
   round_i = 0;
   int stream_to_use = 0;
 
@@ -213,10 +215,10 @@ int main(int argc, char *argv[]){
     //cudaEventCreate(&startEvent, cudaEventBlockingSync);
     //cudaEventCreate(&stopEvent, cudaEventBlockingSync);
    
-    cudaStreamCreateWithFlags(&streams[stream_to_use], cudaStreamNonBlocking);
     //cudaEventRecord(startEvent, streams[round_i]);
 
-    cudaStreamSynchronize(streams[stream_to_use]);
+    //cudaStreamSynchronize(streams[stream_to_use]);
+
     nvjpegDecodeBatched(
 			handle,
 			jpeg_handle,
