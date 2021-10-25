@@ -2730,7 +2730,6 @@ p
 #+RESULTS:
 [[file:~/R-images/image-stream_test_plot.png]]
 
-
 * CPU x GPU
 
 #+begin_src R :results output :exports both :session *R-local*
@@ -2876,7 +2875,6 @@ left_join(
 #+RESULTS:
 [[file:~/R-images/image-CPU_x_GPU_porcentagem.png]]
 
-
 * Traces 
 ** Read csv
 #+begin_src R :results output :exports both :session *R-local*
@@ -2978,4 +2976,39 @@ df.16 %>%
 #+RESULTS:
 [[file:~/R-images/image-Gantt_chart.png]]
 
+
+
+* Traces with nsys
+** Run tests
+#+begin_src bash
+# First copy data to tmp
+# cp -r ~/Cerrado/ePhenology_phenocam_CORE_2011-2020/2020/ /tmp
+# Run nsys profile 
+# Using one stream
+sudo /sbin/sysctl vm.drop_caches=3
+/usr/local/cuda/bin/nsys profile run /tmp/2020/ 1 1500 1
+sudo /sbin/sysctl vm.drop_caches=3
+/usr/local/cuda/bin/nsys profile run /tmp/2020/ 100 1500 1
+sudo /sbin/sysctl vm.drop_caches=3
+/usr/local/cuda/bin/nsys profile run /tmp/2020/ 500 1500 1
+# Using multiple streams
+sudo /sbin/sysctl vm.drop_caches=3
+/usr/local/cuda/bin/nsys profile run /tmp/2020/ 1 1500 4
+sudo /sbin/sysctl vm.drop_caches=3
+/usr/local/cuda/bin/nsys profile run /tmp/2020/ 100 1500 4
+sudo /sbin/sysctl vm.drop_caches=3
+/usr/local/cuda/bin/nsys profile run /tmp/2020/ 500 1500 4
+#+end_src
+
+** Traces description
+|----------------------+------------+--------------+-----------|
+| file                 | batch size | total images | n streams |
+|----------------------+------------+--------------+-----------|
+| traces/report1.qdrep |          1 |         1500 |         1 |
+| traces/report2.qdrep |        100 |         1500 |         1 |
+| traces/report3.qdrep |        500 |         1500 |         1 |
+| traces/report4.qdrep |          1 |         1500 |         4 |
+| traces/report5.qdrep |        100 |         1500 |         4 |
+| traces/report6.qdrep |        500 |         1500 |         4 |
+|----------------------+------------+--------------+-----------|
 
