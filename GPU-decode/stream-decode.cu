@@ -114,11 +114,19 @@ class ImageDecoder {
 
   // nvJPEG stuff
   nvjpegHandle_t handle;
-  nvjpegDevAllocator_t dev_allocator = {&dev_malloc, &dev_free};
+  nvjpegDevAllocator_t device_allocator = {&dev_malloc, &dev_free};
   nvjpegPinnedAllocator_t pinned_allocator ={&host_malloc, &host_free};
   nvjpegStatus_t status;
   nvjpegJpegState_t jpeg_handle;
-
+  nvjpegJpegDecoder_t decoder_handle;
+  nvjpegJpegState_t decoder_state;
+  nvjpegJpegStream_t jpeg_stream;
+  //nvjpegPinnedAllocator_t pinned_allocator;
+  nvjpegBufferPinned_t pinned_buffer;
+  //nvjpegDevAllocator_t device_allocator;
+  nvjpegBufferDevice_t device_buffer;
+  nvjpegDecodeParams_t decode_params;
+  
   cudaStream_t *streams;
 
   ImageDecoder(std::vector<std::string> images_path, int batch_size, int total_images, int n_streams){
@@ -133,7 +141,7 @@ class ImageDecoder {
 
      
     
-    this->status = nvjpegCreateEx(
+    /*this->status = nvjpegCreateEx(
 		      NVJPEG_BACKEND_GPU_HYBRID,
 		      &this->dev_allocator,
 		      &this->pinned_allocator,
@@ -141,15 +149,57 @@ class ImageDecoder {
 		      &this->handle);
 
     nvjpegJpegStateCreate(this->handle, &this->jpeg_handle);
-    
+
     nvjpegDecodeBatchedInitialize(
         this->handle, this->jpeg_handle,
-	this->batch_size, 1, NVJPEG_OUTPUT_RGB);
+	this->batch_size, 1, NVJPEG_OUTPUT_RGB);*/
+
+    nvjpegCreateSimple(&this->handle);
+
+    nvjpegDecoderCreate(
+        this->handle, 
+	NVJPEG_BACKEND_GPU_HYBRID, 
+        &this->decoder_handle);
+
+   nvjpegDecoderStateCreate(
+        this->handle,
+        this->decoder_handle,
+	&this->decoder_state);
+
+   nvjpegJpegStreamCreate(
+        this->handle, 
+	&this->jpeg_stream);	
+
+   nvjpegBufferPinnedCreate(
+        this->handle, 
+	&this->pinned_allocator,
+	&this->pinned_buffer);
+
+   nvjpegBufferDeviceCreate(
+        this->handle, 
+        &this->device_allocator,
+	&this->device_buffer);
+
+   nvjpegStateAttachPinnedBuffer(
+        this->decoder_state,
+        this->pinned_buffer);
+
+   nvjpegStateAttachDeviceBuffer(
+        this->decoder_state,
+        this->device_buffer);
+
+   nvjpegDecodeParamsCreate(
+        this->handle, 
+        &this->decode_params);
+
   }
 
   void load_next_images(int buffer_size, int image_index, unsigned char **buffer_images, size_t *buffer_images_sizes){
     nvtxRangePush(__FUNCTION__);
 
+#pragma omp parallel default(shared)
+{
+#pragma omp for 
     for(int i = 0; i < buffer_size; i++){
       //std::cout << i << " " << input_images_names[i] << std::endl;
       FILE* file = fopen(this->images_path[i+image_index].c_str(), "rb");
@@ -166,7 +216,7 @@ class ImageDecoder {
       buffer_images[i] = jpg;
       buffer_images_sizes[i] = (size_t) size;
     }
-
+ }
     nvtxRangePop();
 
   }
@@ -218,6 +268,121 @@ class ImageDecoder {
     for(int i = 0; i < this->n_streams; i++){
       cudaStreamDestroy(this->streams[i]);
     }
+  }
+
+
+  void decode_decoupled(){
+
+    this->create_streams();    
+    nvjpegImage_t *device_output_buffer = (nvjpegImage_t*) malloc(sizeof(nvjpegImage_t) * this->batch_size);
+    
+    for(int b_start = 0; b_start < this->total_images; b_start += this->batch_size){
+
+      nvtxRangePush("batch_decode");
+
+      // Load the next batch of images
+      unsigned char **buffer_images = (unsigned char**) malloc(this->batch_size * sizeof(unsigned char *));
+      size_t *buffer_images_sizes = (size_t*) malloc(this->batch_size * sizeof(size_t));
+      malloc_check((void*) buffer_images, "buffer_images");
+      malloc_check((void*)buffer_images_sizes, "buffer_images_sizes");
+      this->load_next_images(this->batch_size, b_start, buffer_images, buffer_images_sizes);
+
+      
+      nvjpegJpegStream_t *jpeg_streams = (nvjpegJpegStream_t*) malloc(sizeof(nvjpegJpegStream_t) * this->batch_size);
+      for(int in_batch = 0; in_batch < this->batch_size; in_batch++){
+
+	nvjpegJpegStreamCreate(
+        this->handle, 
+	&jpeg_streams[in_batch]);
+	nvjpegJpegStreamParse(
+			      this->handle,
+			      buffer_images[in_batch], 
+			      buffer_images_sizes[in_batch],
+			      0,
+			      0,
+			      jpeg_streams[in_batch]);
+      }
+
+      // Create the device output buffers assuming that all images have the same size
+      if(b_start == 0){
+	
+	for(int in_batch = 0; in_batch < this->batch_size; in_batch++){ 
+	  unsigned int components_num;
+	  nvjpegJpegStreamGetComponentsNum(
+					   jpeg_streams[0],
+					   &components_num);
+	  //std::cout << "components_num: " << components_num << std::endl;
+
+	  for(int channel = 0; channel < components_num; channel++){
+	    unsigned int width;
+	    unsigned int height;    
+	    nvjpegJpegStreamGetComponentDimensions(
+						   jpeg_streams[0],
+						   channel,
+						   &width,
+						   &height
+						   );
+	    //std::cout << "width: " << width << std::endl;
+	    //std::cout << "heigth: " << height << std::endl;
+	    auto malloc_state = cudaMalloc((void**)&device_output_buffer[in_batch].channel[channel], width*height);
+	    if(malloc_state != cudaSuccess){
+	      std::cout << "CudaMalloc error(" << cudaGetErrorString(malloc_state) <<  std::endl;
+	      exit(1);
+	    }
+	  }
+	
+	}
+      }
+
+
+#pragma omp parallel default(shared)
+{
+#pragma omp for 
+      for(int in_batch = 0; in_batch < this->batch_size; in_batch++){
+
+	nvtxRangePush("host_decode");
+	nvjpegDecodeJpegHost(
+			     this->handle,
+			     this->decoder_handle,
+			     this->decoder_state,
+			     this->decode_params,
+			     jpeg_streams[in_batch]);
+	nvtxRangePop();
+      }
+}
+
+ #pragma omp parallel default(shared)
+{
+#pragma omp for
+       for(int in_batch = 0; in_batch < this->batch_size; in_batch++){
+	 nvtxRangePush("transfer");
+	 nvjpegDecodeJpegTransferToDevice(
+					  this->handle,
+					  this->decoder_handle,
+					  this->decoder_state,
+					  jpeg_streams[in_batch],
+					  this->streams[in_batch % this->n_streams]);
+	 nvtxRangePop();
+	
+       }
+}      
+      nvtxRangePush("GPU_decode");
+      for(int in_batch = 0; in_batch < this->batch_size; in_batch++){
+
+	nvjpegDecodeJpegDevice(
+			       this->handle, 
+			       this->decoder_handle,
+			       this->decoder_state,
+			       &device_output_buffer[in_batch],
+			       this->streams[in_batch % this->n_streams]);
+	
+      }
+      nvtxRangePop();
+      nvtxRangePop();
+
+    }
+
+    //    cudaFree();
   }
 
   void decode(){
@@ -331,7 +496,7 @@ int main(int argc, char *argv[]){
 
   ImageDecoder decoder(input_images_names, batch_size, total_images, n_streams);
   decoder.nvJPEG_start();
-  decoder.decode();
+  decoder.decode_decoupled();
 
   return(0);
 

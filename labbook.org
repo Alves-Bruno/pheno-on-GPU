@@ -2977,7 +2977,6 @@ df.16 %>%
 [[file:~/R-images/image-Gantt_chart.png]]
 
 
-
 * Traces with nsys
 ** Run tests
 #+begin_src bash
@@ -3012,3 +3011,31 @@ sudo /sbin/sysctl vm.drop_caches=3
 | traces/report6.qdrep |        500 |         1500 |         4 |
 |----------------------+------------+--------------+-----------|
 
+
+* nvJPEG with Decoupled phases 
+- Below is the sequence of API calls to decode a single image
+  1. Initialize all the items that are used in the decoding process:
+     - [X] Create the library handle using one of the library handle initialization routines.
+     - [X] Choose decoder implementation nvjpegBackend_t, and create decoder using nvjpegDecoderCreate().
+     - [X] Create JPEG decoder state using nvjpegDecoderStateCreate().
+     - [X] Create JPEG stream using nvjpegJpegStreamCreate().
+     - [X] Create the pinned and device buffers used by the decoder using the below APIs respectively. These buffers are used to store intermediate decoding results.
+         nvjpegBufferPinnedCreate()
+         nvjpegBufferDeviceCreate()
+     - [X] Link the buffers to the JPEG state using the below APIs respectively:
+         nvjpegStateAttachPinnedBuffer()
+         nvjpegStateAttachDeviceBuffer()
+     - [X] Create decode parameters using the below API. This is used to set the output format, and enable ROI decode:
+
+         nvjpegDecodeParamsCreate()
+  2. Perform decoding:
+     - [ ] Parse the jpeg bit-stream using nvjpegJpegStreamParse()
+             Encoded bitstream information, like channel dimensions, can be retrieved using the below API. This information is used to allocate the output pointers in nvjpegImage_t.
+
+                 nvjpegJpegStreamGetComponentsNum()
+
+                 nvjpegJpegStreamGetComponentDimensions()
+     - [ ] Call the decode API in the below sequence to decode the image:
+             nvjpegDecodeJpegHost()
+             nvjpegDecodeJpegTransferToDevice()
+             nvjpegDecodeJpegDevice()
