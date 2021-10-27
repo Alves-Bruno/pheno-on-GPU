@@ -26,6 +26,12 @@
 
 #include <cstdlib>
 
+#include <nvToolsExt.h> 
+#include <sys/syscall.h>
+#include <unistd.h>
+
+#include <omp.h>
+
 int readInput(const std::string &sInputPath, std::vector<std::string> &filelist)
 {
     int error_code = 1;
@@ -86,12 +92,220 @@ int readInput(const std::string &sInputPath, std::vector<std::string> &filelist)
     return 0;
 }
 
+int dev_malloc(void **p, size_t s) { return (int)cudaMalloc(p, s); }
+int dev_free(void *p) { return (int)cudaFree(p); }
+int host_malloc(void** p, size_t s, unsigned int f) { return (int)cudaHostAlloc(p, s, f); }
+int host_free(void* p) { return (int)cudaFreeHost(p); }
+
 void malloc_check(void *ptr, const char *message){
   if(ptr == NULL){
     std::cout << "Could not malloc [" << ptr << "]" << std::endl;
     exit(1);
   }
 }
+
+class ImageDecoder {
+  public:          
+  std::vector<std::string> images_path;
+  int batch_i = 0;
+  int batch_size;
+  int total_images;
+  int n_streams;
+
+  // nvJPEG stuff
+  nvjpegHandle_t handle;
+  nvjpegDevAllocator_t dev_allocator = {&dev_malloc, &dev_free};
+  nvjpegPinnedAllocator_t pinned_allocator ={&host_malloc, &host_free};
+  nvjpegStatus_t status;
+  nvjpegJpegState_t jpeg_handle;
+
+  cudaStream_t *streams;
+
+  ImageDecoder(std::vector<std::string> images_path, int batch_size, int total_images, int n_streams){
+
+    this->images_path = images_path;
+    this->batch_size = batch_size;
+    this->total_images = total_images;
+    this->n_streams = n_streams;
+  }
+
+  void nvJPEG_start(){
+
+     
+    
+    this->status = nvjpegCreateEx(
+		      NVJPEG_BACKEND_GPU_HYBRID,
+		      &this->dev_allocator,
+		      &this->pinned_allocator,
+		      NVJPEG_FLAGS_DEFAULT,
+		      &this->handle);
+
+    nvjpegJpegStateCreate(this->handle, &this->jpeg_handle);
+    
+    nvjpegDecodeBatchedInitialize(
+        this->handle, this->jpeg_handle,
+	this->batch_size, 1, NVJPEG_OUTPUT_RGB);
+  }
+
+  void load_next_images(int buffer_size, int image_index, unsigned char **buffer_images, size_t *buffer_images_sizes){
+    nvtxRangePush(__FUNCTION__);
+
+    for(int i = 0; i < buffer_size; i++){
+      //std::cout << i << " " << input_images_names[i] << std::endl;
+      FILE* file = fopen(this->images_path[i+image_index].c_str(), "rb");
+      fseek(file, 0, SEEK_END);
+      unsigned long size=ftell(file);
+
+      unsigned char* jpg = (unsigned char*)malloc(size * sizeof(char));
+      malloc_check((void*) jpg, "jpg");
+      fseek(file, 0, 0);
+      fread(jpg, size, 1, file);
+
+      fclose(file);
+
+      buffer_images[i] = jpg;
+      buffer_images_sizes[i] = (size_t) size;
+    }
+
+    nvtxRangePop();
+
+  }
+
+  void create_output_structs(int buffer_size, int image_index,
+			     unsigned char **buffer_images, size_t *buffer_images_sizes,
+			     int *buffer_considered_pixels, nvjpegImage_t *buffer_destinations){
+
+    nvtxRangePush(__FUNCTION__);
+    for(int i = 0; i < buffer_size; i++){
+
+      int nComponents, widths[NVJPEG_MAX_COMPONENT], heights[NVJPEG_MAX_COMPONENT];
+      nvjpegChromaSubsampling_t subsampling;
+      nvjpegGetImageInfo(
+			 this->handle,
+			 buffer_images[i],
+			 buffer_images_sizes[i],
+			 &nComponents, &subsampling, widths, heights);
+      
+      nvjpegImage_t img_info;
+      for(int c=0; c<3; c++){
+	img_info.pitch[c] = widths[0];
+
+	auto cmalloc_state = cudaMalloc((void**)&img_info.channel[c], widths[0]*heights[0]);
+	if(cmalloc_state != cudaSuccess){
+	  
+	  std::cout << "CudaMalloc error(" << cudaGetErrorString(cmalloc_state) << ") on " << i+image_index << " at "<< this->images_path[i+image_index] << std::endl;
+	  exit(1);
+	}
+      }
+      buffer_considered_pixels[i] = widths[0]*heights[0];
+      buffer_destinations[i] = img_info;
+    }
+    
+    nvtxRangePop();
+
+  }
+
+  void create_streams(){
+    // Create the streams
+    this->streams = (cudaStream_t*) malloc(this->n_streams * sizeof(cudaStream_t));
+    for(int i=0; i< this->n_streams; i++){
+      cudaStreamCreateWithFlags(&streams[i], cudaStreamNonBlocking);
+    }
+
+  }
+
+  void delete_streams(){
+    for(int i = 0; i < this->n_streams; i++){
+      cudaStreamDestroy(this->streams[i]);
+    }
+  }
+
+  void decode(){
+
+    this->create_streams();
+    
+    int stream_to_use = 0;
+
+#pragma omp parallel default(shared)
+{
+#pragma omp for schedule(dynamic)
+    for(int b_start = 0; b_start < this->total_images; b_start += this->batch_size){
+      //int tid = omp_get_thread_num();
+      //std::cout << tid << ": " << b_start << std::endl;
+      nvtxRangePush(__FUNCTION__);
+
+      // Set the current batch size of images
+      int b_size = 0;
+      if(b_start + this->batch_size >= this->total_images){
+	b_size = this->total_images - b_start;
+	nvjpegDecodeBatchedInitialize(
+            this->handle, this->jpeg_handle,
+	    b_size, 1, NVJPEG_OUTPUT_RGB);
+      }else{
+	b_size = this->batch_size;
+      }
+
+#pragma omp critical
+{
+      if(stream_to_use >= this->n_streams){
+	stream_to_use = 0;
+      }
+}
+      // Load the next batch of images
+      unsigned char **buffer_images = (unsigned char**) malloc(b_size * sizeof(unsigned char *));
+      size_t *buffer_images_sizes = (size_t*) malloc(b_size * sizeof(size_t));
+      malloc_check((void*) buffer_images, "buffer_images");
+      malloc_check((void*)buffer_images_sizes, "buffer_images_sizes");
+      this->load_next_images(b_size, b_start, buffer_images, buffer_images_sizes);
+
+#pragma omp critical
+{
+  // Create the output structs for the next decode
+      int *buffer_considered_pixels = (int*) malloc(sizeof(int) * b_size);
+      nvjpegImage_t *buffer_destinations = (nvjpegImage_t*) malloc(b_size * sizeof(nvjpegImage_t));
+      malloc_check((void*) buffer_destinations, "buffer_destinations");
+      this->create_output_structs(b_size, b_start,
+			    buffer_images, buffer_images_sizes,
+			    buffer_considered_pixels, buffer_destinations);
+      
+      nvjpegDecodeBatched(
+			  this->handle,
+			  this->jpeg_handle,
+			  buffer_images,
+			  buffer_images_sizes,
+			  buffer_destinations,
+			  this->streams[stream_to_use]);
+      //std::cout << "Use this stream: " << stream_to_use << std::endl;
+      stream_to_use++;
+      
+
+      size_t free_mem;
+      size_t total_mem;
+      cudaMemGetInfo(&free_mem , &total_mem);
+      //std::cout << "Free: " << free_mem << " bytes of " << total_mem << std::endl;
+      //std::cout << "Free memory: " << 100.00 * (free_mem / float(total_mem)) << "%" << std::endl;
+
+      nvtxMark("cudaFree");
+      for(int i = 0; i < b_size; i++){
+	free(buffer_images[i]);
+	for(int channel=0; channel < 3; channel++){
+	  cudaFree(buffer_destinations[i].channel[channel]);
+	}
+      }
+      free(buffer_images);
+      free(buffer_images_sizes);
+      free(buffer_destinations);
+
+      nvtxRangePop();
+
+    }
+}
+}
+    this->delete_streams();
+  }
+  
+};
+
 int main(int argc, char *argv[]){
 
   if(argc < 5){
@@ -105,7 +319,6 @@ int main(int argc, char *argv[]){
   int batch_size = atoi(argv[2]);
   int total_images = atoi(argv[3]);
   int n_streams = atoi(argv[4]);
-  //std::cout << "batch_size: " << batch_size << ", total_images: " << total_images << std::endl;
   
   // Read images at path
   readInput(images_path, input_images_names);
@@ -115,264 +328,11 @@ int main(int argc, char *argv[]){
 
   if(batch_size > total_images)
     batch_size = total_images;
-    
-  // Memory allocation 
-  unsigned char **input_images_buffer = (unsigned char**) malloc(total_images * sizeof(unsigned char *));
-  malloc_check((void*) input_images_buffer, "input_images_buffer");
-  size_t *input_images_buffer_sizes = (size_t*) malloc(total_images * sizeof(size_t));
-  malloc_check((void*)input_images_buffer_sizes, "input_images_buffer_sizes");
 
-  std::vector<double> fread_times;
-  for(int i = 0; i < total_images; i++){
-    auto start_fread = std::chrono::high_resolution_clock::now();
-    //std::cout << i << " " << input_images_names[i] << std::endl;
-    FILE* file = fopen(input_images_names[i].c_str(), "rb");
-    fseek(file, 0, SEEK_END);
-    unsigned long size=ftell(file);
+  ImageDecoder decoder(input_images_names, batch_size, total_images, n_streams);
+  decoder.nvJPEG_start();
+  decoder.decode();
 
-    unsigned char* jpg = (unsigned char*)malloc(size * sizeof(char));
-    malloc_check((void*) jpg, "jpg");
-    fseek(file, 0, 0);
-    fread(jpg, size, 1, file);
+  return(0);
 
-    fclose(file);
-    //free(file);
-
-    input_images_buffer[i] = jpg;
-    input_images_buffer_sizes[i] = (size_t) size;
-    auto end_fread = std::chrono::high_resolution_clock::now();
-    double fread_time_i = std::chrono::duration_cast<std::chrono::microseconds>(end_fread - start_fread).count();
-    fread_times.push_back(fread_time_i);
-}
-  
-  //  std::cout << "GPU starts" << std::endl;
-  
-  nvjpegHandle_t handle;
-  nvjpegCreateSimple(&handle);
-  nvjpegJpegState_t jpeg_handle;
-  nvjpegJpegStateCreate(handle, &jpeg_handle);
-
-  nvjpegDecodeBatchedInitialize(handle, jpeg_handle,
-                                batch_size, 1, NVJPEG_OUTPUT_RGB);
-
-  int n_rounds = total_images / batch_size;
-  nvjpegImage_t **dest_handle = (nvjpegImage_t**) malloc(n_rounds * sizeof(nvjpegImage_t*));
-  malloc_check((void*)dest_handle, "dest_handle");
-
-  int *considered_pixels = (int*) malloc(sizeof(int) * total_images);
-
-  int round_i = 0;
-  for(int b_start = 0; b_start < total_images; b_start += batch_size){
-
-    // Malloc the output buffer
-    nvjpegImage_t *destinations = (nvjpegImage_t*) malloc(batch_size * sizeof(nvjpegImage_t));
-    malloc_check((void*) destinations, "destinations");
-    int dest_i = 0;
-    for(int i = b_start; i < b_start + batch_size; i++){
-      int nComponents, widths[NVJPEG_MAX_COMPONENT], heights[NVJPEG_MAX_COMPONENT];
-      nvjpegChromaSubsampling_t subsampling;
-      nvjpegGetImageInfo(
-			 handle,
-			 input_images_buffer[i],
-			 input_images_buffer_sizes[i],
-			 &nComponents, &subsampling, widths, heights);
-      
-      nvjpegImage_t img_info;
-      for(int c=0; c<3; c++){
-	img_info.pitch[c] = widths[0];
-	if(cudaMalloc((void**)&img_info.channel[c], widths[0]*heights[0]) != cudaSuccess){
-	  std::cout << "CudaMalloc error" << std::endl;
-	  exit(1);
-	}
-      }
-
-      considered_pixels[i] = widths[0]*heights[0];
-      destinations[dest_i] = img_info;
-      dest_i++;
-    }
-    
-    dest_handle[round_i] = destinations;
-    round_i++;
-
-  }
-
-  cudaStream_t *streams = (cudaStream_t*) malloc(n_streams * sizeof(cudaStream_t));
-  for(int i=0; i< n_streams; i++){
-    cudaStreamCreateWithFlags(&streams[i], cudaStreamNonBlocking);
-  }
-  round_i = 0;
-  int stream_to_use = 0;
-
-  auto start_decode = std::chrono::high_resolution_clock::now();
-  for(int b_start = 0; b_start < total_images; b_start += batch_size){
-
-    if(stream_to_use >= n_streams){
-      stream_to_use = 0;
-    }
-
-
-    //cudaEvent_t startEvent = NULL, stopEvent = NULL;
-    //cudaEventCreate(&startEvent, cudaEventBlockingSync);
-    //cudaEventCreate(&stopEvent, cudaEventBlockingSync);
-   
-    //cudaEventRecord(startEvent, streams[round_i]);
-
-    //cudaStreamSynchronize(streams[stream_to_use]);
-
-    nvjpegDecodeBatched(
-			handle,
-			jpeg_handle,
-			&input_images_buffer[b_start],
-			&input_images_buffer_sizes[b_start],
-			dest_handle[round_i],
-			streams[stream_to_use]);
-
-
-    //float loopTime = 0;
-    //cudaEventRecord(stopEvent, streams[round_i]);
-    //cudaEventSynchronize(stopEvent);
-    //cudaEventElapsedTime(&loopTime, startEvent, stopEvent);
-    //double decode_time_i = static_cast<double>(loopTime);
-
-    //cudaStreamSynchronize(streams[stream_to_use]);
-
-    round_i++;
-    stream_to_use++;
-
-  }
-  cudaDeviceSynchronize();
-  auto end_decode = std::chrono::high_resolution_clock::now();
-  double decode_time = std::chrono::duration_cast<std::chrono::microseconds>(end_decode - start_decode).count();
-
-  
-
-  std::vector<double> calc_times;
-  int *channel_avg = (int *) malloc(total_images * 3 * sizeof(int));
-  for(int i = 0; i < total_images; i++){
-    for(int c=0; c<3; c++){
-
-      auto start_calc = std::chrono::high_resolution_clock::now();
-      //      std::cout << c << " " << i/batch_size << " " << i%batch_size << std::endl;
-      //printf("[%d, %d]: dest_handle[%d][%d]\n", i, c,  i/batch_size,  i%batch_size);
-      thrust::device_ptr<unsigned char> channel((unsigned char*) dest_handle[i/batch_size][i%batch_size].channel[c]);
-      
-      channel_avg[(i*3) + c] = thrust::reduce(
-          channel, // Vector start
-	  channel + considered_pixels[i], // Vector end 
-	  (int) 0, // reduce first value
-	  thrust::plus<int>()); // reduce operation
-
-      //std::cout << "AVG: " << channel_avg[(i*3) + c] / (float) considered_pixels[i] << std::endl;
-
-      cudaDeviceSynchronize();
-      auto end_calc = std::chrono::high_resolution_clock::now();
-      double calc_time_i = std::chrono::duration_cast<std::chrono::microseconds>(end_calc - start_calc).count();
-      calc_times.push_back(calc_time_i);
-    }
-  }
-
-
-  printf("decode_time\n");
-  printf("%lf\n", decode_time);
-
-  //  double decode_time = std::chrono::duration_cast<std::chrono::microseconds>(end_decode - start_decode).count();
-  
-  //  printf("fread_time, decode_time, fread_time.by_image, decode_time.by_image\n");
-  /*
-  printf("%lf, %lf, %lf, %lf, %lf, %lf\n",
-	 fread_time,
-	 decode_time,
-	 calc_time,
-	 fread_time / (float)total_images,
-	 decode_time / (float)total_images,
-	 calc_time / (float)total_images
-	 );
-  */
-
-  /*
-  std::cout << "decode_time, fread_time, calc.time.R, calc.time.G, calc.time.B" << std::endl;
-
-  int batch_i = -1;
-  for(int i = 0; i < total_images; i++){
-    
-    if(batch_i != i/batch_size){
-      printf("%lf, ", decode_times[i/batch_size]);
-      batch_i = i/batch_size;
-    }
-    else
-    printf(", ");
-      
-    printf("%lf, %lf, %lf, %lf\n",
-	   fread_times[i], calc_times[(i * 3) + 0], calc_times[(i * 3) + 1], calc_times[(i * 3) + 2]);
-  }
-  */
-
-  //int image_i = 0;
-  //printf("[%d] R %d G %d B %d\n", image_i, channel_avg[(image_i*3) + 0], channel_avg[(image_i*3) + 1], channel_avg[(image_i*3) + 2]);
-  //image_i = total_images - 1;
-  //printf("[%d] R %d G %d B %d\n", image_i, channel_avg[(image_i*3) + 0], channel_avg[(image_i*3) + 1], channel_avg[(image_i*3) + 2]);
-  
-  // Free all the stuff
-  for(int i = 0; i < total_images; i++){
-    free(input_images_buffer[i]);
-  }
-  free(input_images_buffer);
-  free(input_images_buffer_sizes);
-  for(int i = 0; i < n_rounds; i++){
-    free(dest_handle[i]);
-    //cudaStreamDestroy(streams[i]);
-  }
-  free(dest_handle);
-  free(considered_pixels);
-
-  for(int i = 0; i < n_streams; i++){
-    cudaStreamDestroy(streams[i]);
-  }
-  
-  /*
-  unsigned char *red_char_host = (unsigned char*) malloc(sizeof(unsigned char) * (widths[0]*heights[0]));
-  cudaError_t copy_err = cudaMemcpy((void*)red_char_host, (void*)destinations[0].channel[0], (widths[0]*heights[0]) * sizeof(unsigned char), cudaMemcpyDeviceToHost);
-  //cudaDeviceSynchronize();
-  
-  if (copy_err == cudaSuccess){
-    printf("COPY SUCCESS\n");
-    int sum_check = 0;
-    for(int i=0; i<(widths[0]*heights[0]); i++){
-      //printf("[%d]: %d\n", i, red_char_host[i]);
-      sum_check += (int) red_char_host[i];
-    }
-    printf("RED SUM CHECK: %d\n", sum_check);
-    printf("RED SUM CHECK: %f\n", sum_check / (float)(widths[0]*heights[0]));
-    
-    }
-  */
-    
-  /*
-  int channel_sum[3];
-  for(int i=0; i<3; i++){
-    
-    thrust::device_ptr<unsigned char> channel((unsigned char*)img_info.channel[i]);
-    //    thrust::device_ptr<unsigned char> channel((unsigned char*)out_buffer[0].channel[i]);
-    // compute sum on the device
-    channel_sum[i] = thrust::reduce(
-      channel, // Vector start
-      channel + (widths[0]*heights[0]), // Vector end 
-      (int) 0, // reduce first value
-      thrust::plus<int>()); // reduce operation
-    
-  }
-  cudaDeviceSynchronize();
-    
-  for(int i=0; i<3; i++){
-    printf("Channel[%d] sum: %d\n", i, channel_sum[i]);
-    printf("Channel[%d] avg: %f\n", i, channel_sum[i] / (float)(widths[0]*heights[0]));
-  }
-
-  double fread_time = std::chrono::duration_cast<std::chrono::microseconds>(end_fread - start_fread).count();
-  double decode_time = std::chrono::duration_cast<std::chrono::microseconds>(end_decode - start_decode).count();
-  double calc_time = std::chrono::duration_cast<std::chrono::microseconds>(end_calc - start_calc).count();
-
-  printf("%s, %lf, %lf, %lf\n", argv[1], fread_time, decode_time, calc_time);
-  */
-  
 }
