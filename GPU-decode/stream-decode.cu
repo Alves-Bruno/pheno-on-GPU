@@ -112,6 +112,9 @@ class ImageDecoder {
   int total_images;
   int n_streams;
 
+  int images_width;
+  int images_height;
+
   // nvJPEG stuff
   nvjpegHandle_t handle;
   nvjpegDevAllocator_t device_allocator = {&dev_malloc, &dev_free};
@@ -192,14 +195,18 @@ class ImageDecoder {
         this->handle, 
         &this->decode_params);
 
+   nvjpegDecodeParamsSetOutputFormat(
+        this->decode_params,
+        NVJPEG_OUTPUT_RGB);	
+
   }
 
   void load_next_images(int buffer_size, int image_index, unsigned char **buffer_images, size_t *buffer_images_sizes){
     nvtxRangePush(__FUNCTION__);
 
-#pragma omp parallel default(shared)
+    //#pragma omp parallel default(shared)
 {
-#pragma omp for 
+  //#pragma omp for schedule(static)
     for(int i = 0; i < buffer_size; i++){
       //std::cout << i << " " << input_images_names[i] << std::endl;
       FILE* file = fopen(this->images_path[i+image_index].c_str(), "rb");
@@ -273,6 +280,8 @@ class ImageDecoder {
 
   void decode_decoupled(){
 
+    int *channel_avg = (int *) malloc(this->total_images * 3 * sizeof(int));
+    
     this->create_streams();    
     nvjpegImage_t *device_output_buffer = (nvjpegImage_t*) malloc(sizeof(nvjpegImage_t) * this->batch_size);
     
@@ -294,6 +303,8 @@ class ImageDecoder {
 	nvjpegJpegStreamCreate(
         this->handle, 
 	&jpeg_streams[in_batch]);
+
+	// Parses the bitstream and stores the metadata in the jpeg_stream struct. 
 	nvjpegJpegStreamParse(
 			      this->handle,
 			      buffer_images[in_batch], 
@@ -301,6 +312,7 @@ class ImageDecoder {
 			      0,
 			      0,
 			      jpeg_streams[in_batch]);
+	std::cout << "buffer_image_size: " << buffer_images_sizes[in_batch] << " bytes." << std::endl;
       }
 
       // Create the device output buffers assuming that all images have the same size
@@ -313,18 +325,34 @@ class ImageDecoder {
 					   &components_num);
 	  //std::cout << "components_num: " << components_num << std::endl;
 
+	  int nComponents, Awidths[components_num], Aheights[components_num];
+	  nvjpegChromaSubsampling_t subsampling;
+	  
+	  nvjpegGetImageInfo(
+			 this->handle,
+			 buffer_images[in_batch],
+			 buffer_images_sizes[in_batch],
+			 &nComponents, &subsampling, Awidths, Aheights);
+	  
+	  std::cout << "widths[0]: " << Awidths[0] << std::endl;
+	  std::cout << "heights[0]: " << Aheights[0] << std::endl;
+      
 	  for(int channel = 0; channel < components_num; channel++){
 	    unsigned int width;
 	    unsigned int height;    
 	    nvjpegJpegStreamGetComponentDimensions(
 						   jpeg_streams[0],
-						   channel,
+						   0,
 						   &width,
 						   &height
 						   );
-	    //std::cout << "width: " << width << std::endl;
-	    //std::cout << "heigth: " << height << std::endl;
-	    auto malloc_state = cudaMalloc((void**)&device_output_buffer[in_batch].channel[channel], width*height);
+	    std::cout << "width: " << width << std::endl;
+	    std::cout << "heigth: " << height << std::endl;
+
+	    this->images_width = width;
+	    this->images_height = height;
+	    
+	    auto malloc_state = cudaMalloc((void**) &(device_output_buffer[in_batch].channel[channel]), sizeof(unsigned char) * width*height);
 	    if(malloc_state != cudaSuccess){
 	      std::cout << "CudaMalloc error(" << cudaGetErrorString(malloc_state) <<  std::endl;
 	      exit(1);
@@ -337,10 +365,11 @@ class ImageDecoder {
 
 #pragma omp parallel default(shared)
 {
-#pragma omp for 
+#pragma omp for schedule(static)
       for(int in_batch = 0; in_batch < this->batch_size; in_batch++){
 
 	nvtxRangePush("host_decode");
+	// It is synchronous with respect of the host
 	nvjpegDecodeJpegHost(
 			     this->handle,
 			     this->decoder_handle,
@@ -351,11 +380,13 @@ class ImageDecoder {
       }
 }
 
- #pragma omp parallel default(shared)
+// #pragma omp parallel default(shared)
 {
-#pragma omp for
+  //#pragma omp for schedule(static)
        for(int in_batch = 0; in_batch < this->batch_size; in_batch++){
 	 nvtxRangePush("transfer");
+	 // Contains both host and device operations.
+	 // Hence it is a mix of synchronous and asynchronous operations with respect to the host
 	 nvjpegDecodeJpegTransferToDevice(
 					  this->handle,
 					  this->decoder_handle,
@@ -368,7 +399,7 @@ class ImageDecoder {
 }      
       nvtxRangePush("GPU_decode");
       for(int in_batch = 0; in_batch < this->batch_size; in_batch++){
-
+	// This phase is asynchronous with respect to the host
 	nvjpegDecodeJpegDevice(
 			       this->handle, 
 			       this->decoder_handle,
@@ -379,6 +410,40 @@ class ImageDecoder {
       }
       nvtxRangePop();
       nvtxRangePop();
+
+      cudaDeviceSynchronize();
+      // for end
+      for(int in_batch = 0; in_batch < this->batch_size; in_batch++){
+	for(int c=0; c<3 ; c++){
+
+	  unsigned char* values = (unsigned char *) malloc(sizeof(unsigned char) * (this->images_width*this->images_height));
+	  cudaMemcpy((void*) values, (const void*) device_output_buffer[in_batch].channel[c],
+		     (this->images_width*this->images_height), cudaMemcpyDeviceToHost);
+
+	  cudaDeviceSynchronize();
+	  for(int bruno=0; bruno<(this->images_width*this->images_height); bruno++){
+	      std::cout << (int)bruno << ":";
+	      std::cout << (int)values[bruno] << std::endl;
+
+	  } std::cout << std::endl;
+	  
+	  /*//std::cout << (this->images_width*this->images_height) << std::endl;
+	  thrust::device_ptr<unsigned char> channel((unsigned char*) device_output_buffer[in_batch].channel[c]);
+	  
+	  //	  channel_avg[(in_batch*3) + c] = thrust::reduce(
+	  int channel_sum = thrust::reduce(
+			      channel, // Vector start
+			      channel + (this->images_width), // Vector end 
+			      (int) 0, // reduce first value
+			      thrust::plus<int>()); // reduce operation
+
+	  cudaDeviceSynchronize();
+	  std::cout << "SUM: " << channel_sum << std::endl;*/
+	  
+	  //	  std::cout << "SUM: " << channel_avg[(in_batch*3) + c] << std::endl;
+	  //	  std::cout << "AVG: " << channel_avg[(in_batch*3) + c] / (float) (this->images_width*this->images_height) << std::endl;
+	}
+      }
 
     }
 

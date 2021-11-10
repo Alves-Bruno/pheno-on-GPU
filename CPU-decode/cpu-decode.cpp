@@ -53,6 +53,12 @@ std::vector<rgb_sum> phenovis_rgb_mean(
 
   int i, row_number = 0;
   //  for (i = 0; i < images.size(); i++) {
+
+  auto start_for = std::chrono::high_resolution_clock::now();
+
+#pragma omp parallel default(shared)
+{
+#pragma omp for schedule(static)
   for (i = 0; i < total_images; i++) {
    
     // Load the image and apply mask
@@ -65,6 +71,8 @@ std::vector<rgb_sum> phenovis_rgb_mean(
     //  considered_pixels = apply_mask(image, global_mask);
     //}
 
+
+    /*    
       auto start_calc = std::chrono::high_resolution_clock::now();
 
       int count_pixels = 0;
@@ -99,12 +107,18 @@ std::vector<rgb_sum> phenovis_rgb_mean(
       names.push_back(images[i]);
 
       sum_values.push_back(rgb_sum_);
+
+    */
       
       //Free the image data
       free(image->image);
       free(image);
   }
+}
 
+  auto end_for = std::chrono::high_resolution_clock::now();
+  double for_time = std::chrono::duration_cast<std::chrono::microseconds>(end_for - start_for).count();
+  *total_decode_time += for_time;
   
   return(sum_values);
 
