@@ -1,0 +1,3068 @@
+* Notes - scorep
+
+nvcc
+
+scorep nvcc
+
+--nocompiler
+--cuda
+--noonline-access
+--noopenmp
+--nouser
+
+Diretorio scorep com as informacoes 
+export SCOREP_ENABLE_TRACING=true
+export SCOREP_CUDA_ENABLE=yes
+
+traces.otf2
+otf2-print traces.otf2
+
+https://github.com/schnorr/akypuera/
+https://github.com/schnorr/otf2utils
+
+* Notes
+
+- Fazer o calculo para cada imagem e não acumular
+  - Perde a variabilidade 
+- Do the drop caches 
+- Load image before 
+- Calcular a diferença dos tempos: porcentagem 
+- Testar sempre com 1500 imagens
+- Outro gráfico: Total time x n streams 
+- Check if thrust also has streams 
+
+- Rastrear GPU:
+  - Score-p: https://www.vi-hps.org/projects/score-p
+  - CUPTI interface
+  - https://scorepci.pages.jsc.fz-juelich.de/scorep-pipelines/docs/scorep-6.0/html/measurement.html
+  - " CUDA Performance Measurement"
+
+Setting the environment variable SCOREP_CUDA_ENABLE to yes enables CUDA measurement. Please refer to the description of this variable to enable a particular composition of CUDA measurement features.
+
+https://scorepci.pages.jsc.fz-juelich.de/scorep-pipelines/docs/scorep-6.0/html/scorepmeasurementconfig.html#SCOREP_CUDA_ENABLE
+
+Characterizing the Performance of Modern Architectures Through Opaque Benchmarks: Pitfalls Learned the Hard Way: https://hal.inria.fr/hal-01470399
+
+* Adjust gencode on CMakeLists.txt
+Configure the gencode on the CMakeLists.txt
+#+begin_src bash
+# For hype4:
+#SET(CMAKE_CUDA_FLAGS "-gencode arch=compute_37,code=sm_37")
+# For tupi1:
+SET(CMAKE_CUDA_FLAGS "-gencode arch=compute_61,code=sm_61")
+#+end_src
+* Learning from nvJPEG example 
+
+** Initialization 
+
+#+begin_src C++
+struct decode_params_t {
+  std::string input_dir;
+  int batch_size;
+  int total_images;
+  int dev;
+  int warmup;
+
+  nvjpegJpegState_t nvjpeg_state;
+  nvjpegHandle_t nvjpeg_handle;
+  cudaStream_t stream;
+
+  // used with decoupled API
+  nvjpegJpegState_t nvjpeg_decoupled_state;
+  nvjpegBufferPinned_t pinned_buffers[2]; // 2 buffers for pipelining
+  nvjpegBufferDevice_t device_buffer;
+  nvjpegJpegStream_t  jpeg_streams[2]; //  2 streams for pipelining
+  nvjpegDecodeParams_t nvjpeg_decode_params;
+  nvjpegJpegDecoder_t nvjpeg_decoder;
+
+  nvjpegOutputFormat_t fmt;
+  bool write_decoded;
+  std::string output_dir;
+
+  bool hw_decode_available;
+};
+
+
+int dev_malloc(void **p, size_t s) {
+ return (int)cudaMalloc(p, s); 
+}
+
+int dev_free(void *p) { 
+  return (int)cudaFree(p); 
+}
+
+int host_malloc(void** p, size_t s, unsigned int f) {
+  return (int)cudaHostAlloc(p, s, f);
+}
+
+int host_free(void* p) { 
+  return (int)cudaFreeHost(p); 
+}
+
+// On MAIN:
+
+nvjpegDevAllocator_t dev_allocator = {&dev_malloc, &dev_free};
+nvjpegPinnedAllocator_t pinned_allocator ={&host_malloc, &host_free};
+
+#+end_src
+
+** nvjpegCreateEx
+
+#+begin_src C++
+
+nvjpegStatus_t status = nvjpegCreateEx(
+  NVJPEG_BACKEND_HARDWARE, 
+  &dev_allocator,
+  &pinned_allocator,
+  NVJPEG_FLAGS_DEFAULT,  
+  &params.nvjpeg_handle);
+
+#+end_src
+
+DOC: https://docs.nvidia.com/cuda/nvjpeg/index.html#nvjpeg-create-ex
+Description: Allocates and initializes the library handle using the provided arguments. 
+
+#+begin_src C++
+nvjpegStatus_t nvjpegCreateEx(
+          nvjpegBackend_t backend, 
+          nvjpegDevAllocator_t *dev_allocator, 
+          nvjpegPinnedAllocator_t *pinned_allocator, 
+          unsigned int flags,
+          nvjpegHandle_t *handle);
+#+end_src
+
+*** nvjpegBackend_t backend 
+- https://docs.nvidia.com/cuda/nvjpeg/index.html#nvjpeg-backend
+
+| Member                    | Description                                                                      |
+|---------------------------+----------------------------------------------------------------------------------|
+| NVJPEG_BACKEND_DEFAULT    | Back-end is selected internally                                                  |
+| NVJPEG_BACKEND_HYBRID     | Uses CPU for Huffman decoding                                                    |
+| NVJPEG_BACKEND_GPU_HYBRID | Uses GPU for Huffman decoding. GPU assisted Huffman decoding for batchsize > 100 |
+| NVJPEG_BACKEND_HARDWARE   | Uses Hardware Acceleration for decode.*                                          |
+|---------------------------+----------------------------------------------------------------------------------|
+*Supports baseline JPEG images with single scan with 1 or 3 channels. 410 and 411 chroma subsamplings are not supported. 
+
+*** nvjpegDevAllocator_t *dev_allocator
+- Device memory allocator.
+
+#+begin_src C++
+// Allocate memory on the device. 
+int dev_malloc(void **p, size_t s) {
+ return (int)cudaMalloc(p, s); 
+// p - Pointer to allocated device memory 
+// s - Requested allocation size in bytes
+
+}
+#+end_src
+
+*** nvjpegPinnedAllocator_t *pinned_allocator
+DOC: 
+Description: Pinned host memory allocator.
+
+When the nvjpegPinnedAllocator_t *allocator parameter in the nvjpegCreateEx() function is set as a pointer to the above nvjpegPinnedAllocator_t structure, then this structure will be used for allocating and releasing host pinned memory for copying data to/from device. The function prototypes for the memory allocation and memory freeing functions are similar to the cudaHostAlloc() and cudaFreeHost() functions. They will return 0 in case of success, and non-zero otherwise.
+
+However, if the nvjpegPinnedAllocator_t *allocator parameter in the nvjpegCreateEx() function is set to NULL, then the default memory allocation functions cudaHostAlloc() and cudaFreeHost() will be used. When using nvjpegCreate() or nvjpegCreateSimple() function to create library handle, the default host pinned memory allocator will be used. 
+
+#+begin_src C++
+// Allocates page-locked memory on the host.
+//  pHost     - Device pointer to allocated memory 
+//  size    - Requested allocation size in bytes 
+//  flags    - Requested properties of allocated memory
+
+int host_malloc(void** p, size_t s, unsigned int f) {
+  return (int)cudaHostAlloc(p, s, f);
+  
+}
+#+end_src
+
+*** unsigned int flags
+DOC: https://docs.nvidia.com/cuda/nvjpeg/index.html#nvjpeg-flags
+| Member                                        | Description                                                       |
+|-----------------------------------------------+-------------------------------------------------------------------|
+| NVJPEG_FLAGS_DEFAULT                          | Corresponds to default library behavior                           |
+| NVJPEG_FLAGS_HW_DECODE_NO_PIPELINE            | To be used with NVJPEG_BACKEND_HARDWARE.                          |
+| NVJPEG_FLAGS_ENABLE_MEMORY_POOLS [Deprecated] | Starting with CUDA 11.1 this flag will be ignored                 |
+| NVJPEG_FLAGS_BITSTREAM_STRICT                 | nvJPEG library will try to decode a bitstream not in JPEG format. |
+|-----------------------------------------------+-------------------------------------------------------------------|
+
+*** nvjpegHandle_t *handle
+The library handle.
+#+begin_src C++
+// Can be initialize with:
+nvjpegHandle_t nvjpeg_handle;
+#+end_src
+
+** nvjpegJpegStateCreate
+Description: Allocates and initializes the internal structure required for the JPEG processing. 
+DOC: https://docs.nvidia.com/cuda/nvjpeg/index.html#nvjpegJpegStateCreate
+
+#+begin_src C++
+nvjpegStatus_t nvjpegJpegStateCreate(
+	nvjpegHandle_t      handle,
+	nvjpegJpegState_t   *jpeg_handle);
+#+end_src
+
+Params: 
+nvjpegHandle_t - Input - The library handle.
+nvjpegJpegState_t - Input/Output - The image state handle.
+
+Returns:
+nvjpegStatus_t - An error code. One of the following:
+#+begin_src C++
+ NVJPEG_STATUS_SUCCESS = 0,
+ NVJPEG_STATUS_NOT_INITIALIZED = 1,
+ NVJPEG_STATUS_INVALID_PARAMETER = 2,
+ NVJPEG_STATUS_BAD_JPEG = 3,
+ NVJPEG_STATUS_JPEG_NOT_SUPPORTED = 4,
+ NVJPEG_STATUS_ALLOCATOR_FAILURE = 5,
+ NVJPEG_STATUS_EXECUTION_FAILED = 6,
+ NVJPEG_STATUS_ARCH_MISMATCH = 7,
+ NVJPEG_STATUS_INTERNAL_ERROR = 8,
+ NVJPEG_STATUS_IMPLEMENTATION_NOT_SUPPORTED = 9
+#+end_src
+
+** nvjpegDecoderCreate
+Description: Creates a decoder handle. 
+DOC: https://docs.nvidia.com/cuda/nvjpeg/index.html#nvjpeg-decoder-create
+
+#+begin_src C++
+nvjpegStatus_t nvjpegDecoderCreate(
+	nvjpegHandle_t nvjpeg_handle, 
+	nvjpegBackend_t implementation, 
+	nvjpegJpegDecoder_t* decoder_handle);
+#+end_src
+
+Params:
+
+nvjpegHandle_t nvjpeg_handle - Input - Library handle.
+nvjpegBackend_t backend - Input - Backend parameter for the decoder_handle.
+nvjpegJpegDecoder_t decoder_handle - Input/Output - Decoder state handle.
+
+Returns:
+
+nvjpegStatus_t - An error code.
+#+begin_src C++
+NVJPEG_STATUS_SUCCESS = 0,
+ NVJPEG_STATUS_NOT_INITIALIZED = 1,
+ NVJPEG_STATUS_INVALID_PARAMETER = 2,
+ NVJPEG_STATUS_BAD_JPEG = 3,
+ NVJPEG_STATUS_JPEG_NOT_SUPPORTED = 4,
+ NVJPEG_STATUS_ALLOCATOR_FAILURE = 5,
+ NVJPEG_STATUS_EXECUTION_FAILED = 6,
+ NVJPEG_STATUS_ARCH_MISMATCH = 7,
+ NVJPEG_STATUS_INTERNAL_ERROR = 8,
+ NVJPEG_STATUS_IMPLEMENTATION_NOT_SUPPORTED = 9
+#+end_src
+
+** nvjpegDecoderStateCreate
+Description: Creates the decoder_state internal structure. 
+The decoder_state is associated with the nvjpegBackend_t implementation that was used to create the decoder_handle. 
+DOC: https://docs.nvidia.com/cuda/nvjpeg/index.html#nvjpeg-decoder-state-create
+
+#+begin_src C++
+nvjpegStatus_t nvjpegDecoderStateCreate(
+	nvjpegHandle_t nvjpeg_handle,
+	nvjpegJpegDecoder_t decoder_handle,
+	nvjpegJpegState_t* decoder_state);
+#+end_src
+
+Params: 
+nvjpegHandle_t nvjpeg_handle 	Input 	Host 	Library handle.
+nvjpegJpegDecoder_t decoder_handle 	Input 	Host 	Decoder handle.
+nvjpegJpegState_t* decoder_state 	Input/Output 	Host 	nvJPEG Image State Handle.
+
+Return:
+nvjpegStatus_t - An error code as specified in nvJPEG API Return Codes. 
+
+** nvjpegBufferPinnedCreate
+Creates a pinned buffer handle. 
+
+#+begin_src C++
+nvjpegStatus_t nvjpegBufferPinnedCreate(
+	nvjpegHandle_t handle, 
+	nvjpegPinnedAllocator_t* pinned_allocator,
+	nvjpegBufferPinned_t* buffer);
+#+end_src
+Parameters:
+Parameter 	Input / Output 	Memory 	Description
+nvjpegHandle_t handle 	Input 	Host 	Library handle.
+nvjpegPinnedAllocator_t* pinned_allocator 	Input 	Host 	Pinned host memory allocator. See nvjpegPinnedAllocator_t structure description.
+nvjpegBufferPinned_t* buffer 	Input/Output 	Host 	nvJPEG pinned buffer object.
+
+OBS: However, if the nvjpegPinnedAllocator_t *allocator parameter in the
+nvjpegCreateEx() function is set to NULL, then the default memory allocation
+functions cudaHostAlloc() and cudaFreeHost() will be used 
+
+Returns:
+nvjpegStatus_t - An error code as specified in nvJPEG API Return Codes. 
+
+** nvjpegBufferDeviceCreate
+Creates the device buffer handle. 
+Signature:
+
+#+begin_src C++
+nvjpegStatus_t nvjpegBufferDeviceCreate(
+	nvjpegHandle_t handle, 
+	nvjpegDevAllocator_t* device_allocator,
+	nvjpegBufferDevice_t* buffer);
+#+end_src
+
+Parameters:
+Parameter 	Input / Output 	Memory 	Description
+nvjpegHandle_t handle 	Input 	Host 	Library handle.
+nvjpegDevAllocator_t* device_allocator 	Input 	Host 	Device memory allocator. See nvjpegDevAllocator_t structure description.
+nvjpegBufferDevice_t* buffer 	Input/Output 	Host 	nvJPEG device buffer container.
+
+Returns:
+
+nvjpegStatus_t - An error code as specified in nvJPEG API Return Codes. 
+** nvjpegJpegStreamCreate
+Creates jpeg_stream that is used to parse the JPEG bitstream and store bitstream parameters.
+
+Signature:
+
+#+begin_src C++
+nvjpegStatus_t nvjpegJpegStreamCreate(
+	nvjpegHandle_t handle, 
+	nvjpegJpegStream_t *jpeg_stream);
+#+end_src	
+
+Parameters:
+Parameter 	Input / Output 	Memory 	Description
+nvjpegHandle_t handle 	Input 	Host 	Library handle
+nvjpegJpegStream_t *jpeg_stream 	Input 	Host 	Bitstream handle
+
+Returns:
+
+nvjpegStatus_t - An error code as specified in nvJPEG API Return Codes.
+
+** nvjpegDecodeParamsCreate
+Creates a handle for the parameters. 
+The parameters that can be programmed include: output format, ROI decode, CMYK to RGB conversion.
+
+Signature:
+
+#+begin_src C++
+nvjpegStatus_t nvjpegDecodeParamsCreate(
+	nvjpegHandle_t handle, 
+	nvjpegDecodeParams_t *decode_params);
+#+end_src
+
+Parameters:
+Parameter 	Input / Output 	Memory 	Description
+nvjpegHandle_t handle 	Input 	Host 	Library handle.
+nvjpegDecodeParams_t *decode_params 	Input/Output 	Host 	Decode output parameters.
+
+Returns:
+
+nvjpegStatus_t - An error code as specified in nvJPEG API Return Codes. 
+
+* CPU performance test
+** Run test
+#+begin_src R :results output :exports both :session *R*
+  library(tidyverse)
+
+  machine <- "tupi1"
+  cpu_bin <- "/home/users/bsalves/pheno-on-GPU/CPU-decode/cpu-decode"
+  images_path <- "/tmp/ePhenology_phenocam_CORE_2011-2020/"
+
+  tibble(
+    run.n_images = seq(0, 1500, 100),
+    machine = machine,
+    cpu_bin = cpu_bin,
+    images_path = images_path
+  ) %>%
+    mutate(run.n_images = if_else(run.n_images == 0, 1, run.n_images)) %>%
+    mutate(cmd = paste(cpu_bin, images_path, run.n_images, sep=" ")) %>%
+    rowwise() %>%
+    mutate(run.output = system(cmd, intern=TRUE)) %>%
+    mutate(run.output.split = strsplit(run.output, ", ")) %>%
+    mutate(
+      decode_time = as.double(run.output.split[1]),
+      calc_time = as.double(run.output.split[2]),
+      decode_time.by_image = as.double(run.output.split[3]),
+      calc_time.by_image = as.double(run.output.split[4]),
+    ) %>%
+    select(-run.output.split) %>%
+    select(machine, run.n_images, contains("time")) %>%
+    print -> cpu_performance
+
+cpu_performance %>%
+  write_csv(paste0("CPU_", machine, ".csv"))
+      #select(contains("time")) 
+#+end_src
+
+#+RESULTS:
+#+begin_example
+── Attaching packages ───────────────────────────────────────── tidyverse 1.3.0 ──
+✔ ggplot2 3.3.3     ✔ purrr   0.3.4
+✔ tibble  3.1.0     ✔ dplyr   1.0.5
+✔ tidyr   1.1.3     ✔ stringr 1.4.0
+✔ readr   1.4.0     ✔ forcats 0.5.1
+── Conflicts ──────────────────────────────────────────── tidyverse_conflicts() ──
+✖ dplyr::filter() masks stats::filter()
+✖ dplyr::lag()    masks stats::lag()
+# A tibble: 16 x 6
+# Rowwise: 
+   machine run.n_images decode_time calc_time decode_time.by_i… calc_time.by_im…
+   <
+         <
+      <
+    <
+            <
+           <dbl>
+ 1 tupi1              1        7970      1366             7970             1366 
+ 2 tupi1            100      683238    148402             6832.            1484.
+ 3 tupi1            200     1362524    274073             6813.            1370.
+ 4 tupi1            300     2045802    410613             6819.            1369.
+ 5 tupi1            400     2725708    552691             6814.            1382.
+ 6 tupi1            500     3405040    684818             6810.            1370.
+ 7 tupi1            600     4097587    825258             6829.            1375.
+ 8 tupi1            700     4885334    958098             6979.            1369.
+ 9 tupi1            800     5725981   1097219             7157.            1372.
+10 tupi1            900     6556419   1230293             7285.            1367.
+11 tupi1           1000     7392242   1368887             7392.            1369.
+12 tupi1           1100     8225203   1506520             7477.            1370.
+13 tupi1           1200     9095637   1647165             7580.            1373.
+14 tupi1           1300     9999201   1779472             7692.            1369.
+15 tupi1           1400    10890980   1912277             7779.            1366.
+16 tupi1           1500    11792037   2051870             7861.            1368.
+#+end_example
+** CPU times plot
+#+begin_src R :results output :exports both :session *R-local*
+library(tidyverse)
+system("scp parque:/home/users/bsalves/CPU_tupi1.csv .")
+
+#+end_src
+
+#+RESULTS:
+: ── [1mAttaching packages[22m ───────────────────────────────────────── tidyverse 1.3.1 ──
+: [32m✔[39m [34mggplot2[39m 3.3.5     [32m✔[39m [34mpurrr  [39m 0.3.4
+: [32m✔[39m [34mtibble [39m 3.1.3     [32m✔[39m [34mdplyr  [39m 1.0.7
+: [32m✔[39m [34mtidyr  [39m 1.1.3     [32m✔[39m [34mstringr[39m 1.4.0
+: [32m✔[39m [34mreadr  [39m 2.0.1     [32m✔[39m [34mforcats[39m 0.5.1
+: ── [1mConflicts[22m ──────────────────────────────────────────── tidyverse_conflicts() ──
+: [31m✖[39m [34mdplyr[39m::[32mfilter()[39m masks [34mstats[39m::filter()
+: [31m✖[39m [34mdplyr[39m::[32mlag()[39m    masks [34mstats[39m::lag()
+: CPU_tupi1.csv                                     0%    0     0.0KB/s   --:-- ETACPU_tupi1.csv                                   100%  802    69.4KB/s   00:00
+
+
+#+begin_src R :results output file graphics :file (concat "~/R-images/image-" (replace-regexp-in-string " " "_" (nth 4 (org-heading-components))) ".png") :exports both :width 600 :height 400 :session *R-local*
+
+read_csv("CPU_tupi1.csv") %>%
+  as_tibble() %>%
+#  mutate() %>%
+  ggplot() +
+  geom_line(aes(x=run.n_images, y=decode_time), color="black") + 
+  geom_line(aes(x=run.n_images, y=calc_time), color="black")
+#+end_src
+
+#+RESULTS:
+[[file:~/R-images/image-CPU_times_plot.png]]
+
+* GPU performance test
+** Build program
+#+begin_src bash
+cd GPU-decode
+mkdir build; cd build; cmake ..; make; cd ..
+# To run
+./build/nvjpegDecoder <images_path> <batch_size> <total_images_to_decode>
+#+end_src
+** Run test
+#+begin_src R :results output :exports both :session *R*
+ library(tidyverse)
+
+  machine <- "tupi1"
+  gpu_bin <- "/home/users/bsalves/pheno-on-GPU/GPU-decode/build/nvjpegDecoder"
+  images_path <- "/tmp/ePhenology_phenocam_CORE_2011-2020/"
+
+  tibble(
+    run.n_images = seq(0, 1500, 100),
+    machine = machine,
+    gpu_bin = gpu_bin,
+    images_path = images_path
+  ) %>%
+    mutate(run.n_images = if_else(run.n_images == 0, 1, run.n_images)) %>%
+    mutate(cmd = paste(gpu_bin, images_path, 1, run.n_images, sep=" ")) %>%
+    rowwise() %>%
+    mutate(run.output = system(cmd, intern=TRUE)) %>%
+    mutate(run.output.split = strsplit(run.output, ", ")) %>%
+    mutate(
+      fread_time = as.double(run.output.split[1]),
+      decode_time = as.double(run.output.split[2]),
+      calc_time = as.double(run.output.split[3]),
+      fread_time.by_image = as.double(run.output.split[4]),
+      decode_time.by_image = as.double(run.output.split[5]),
+      calc_time.by_image = as.double(run.output.split[6])
+    ) %>%
+    select(-run.output.split) %>%
+    select(machine, run.n_images, contains("time")) %>%
+    print -> cpu_performance
+
+cpu_performance %>%
+  write_csv(paste0("GPU_", machine, ".csv"))
+      #select(contains("time")) 
+
+#+end_src
+
+#+RESULTS:
+#+begin_example
+# A tibble: 16 x 8
+# Rowwise: 
+   machine run.n_images fread_time decode_time calc_time fread_time.by_image
+   <
+         <
+     <
+      <
+    <
+              <dbl>
+ 1 tupi1              1        172        6223       126                172 
+ 2 tupi1            100      12278      407530      8258                123.
+ 3 tupi1            200      24695      815761     16246                123.
+ 4 tupi1            300      36363     1225981     24962                121.
+ 5 tupi1            400      48458     1635388     31863                121.
+ 6 tupi1            500      61201     2038722     43073                122.
+ 7 tupi1            600      73775     2453825     50784                123.
+ 8 tupi1            700      92051     2995278     55481                132.
+ 9 tupi1            800     109807     3563208     64460                137.
+10 tupi1            900     128879     4148277     70846                143.
+11 tupi1           1000     147974     4730452     78300                148.
+12 tupi1           1100     165516     5345620     86829                150.
+13 tupi1           1200     187570     5899312     92268                156.
+14 tupi1           1300     210559     6561272    100702                162.
+15 tupi1           1400     232551     7220194    115195                166.
+16 tupi1           1500     256486     7867113    124968                171.
+# … with 2 more variables: decode_time.by_image <dbl>, calc_time.by_image <dbl>
+#+end_example
+
+** GPU times plot
+#+begin_src R :results output :exports both :session *R-local*
+library(tidyverse)
+options(crayon.enabled = FALSE)
+system("scp parque:/home/users/bsalves/GPU_tupi1.csv .")
+
+#+end_src
+
+#+RESULTS:
+: GPU_tupi1.csv                                     0%    0     0.0KB/s   --:-- ETAGPU_tupi1.csv                                   100% 1029    82.2KB/s   00:00
+
+
+#+begin_src R :results output file graphics :file (concat "~/R-images/image-" (replace-regexp-in-string " " "_" (nth 4 (org-heading-components))) ".png") :exports both :width 600 :height 400 :session *R-local*
+
+read_csv("GPU_tupi1.csv") %>%
+  as_tibble() %>%
+#  mutate() %>%
+  ggplot() +
+  geom_line(aes(x=run.n_images, y=decode_time), color="black") + 
+  geom_line(aes(x=run.n_images, y=calc_time), color="black")
+#+end_src
+
+#+RESULTS:
+[[file:~/R-images/image-GPU_times_plot.png]]
+
+* GPU performance - stream analysis
+** run test
+#+begin_src R :results output :exports both :session *R*
+ library(tidyverse)
+
+  csv_path <- "~/pheno-on-GPU/"
+  machine <- "tupi1"
+  gpu_bin <- "/home/users/bsalves/pheno-on-GPU/GPU-decode/build/nvjpegDecoder"
+  images_path <- "/tmp/2020/"
+
+  tibble(
+    streams = 2**seq(0, 6),
+  ) %>%
+  group_by(streams) %>% 
+  expand(batch_size = c(1, 10, 100, 500)) %>%
+  group_by(streams, batch_size) %>%
+  expand(repeat_run = seq(1, 10)) %>%
+  ungroup() %>%
+  mutate(
+    run.n_images = 1500,
+    machine = machine,
+    gpu_bin = gpu_bin,
+    images_path = images_path
+  ) %>%
+#  as.data.frame
+#  select(batch_size, stream, repeat_run) %>% arrange(batch_size, stream, repeat_run) %>% as.data.frame
+    mutate(
+      cmd = paste(
+        gpu_bin, images_path, batch_size, run.n_images, streams, '>', 
+        paste(paste0(csv_path, machine), batch_size, run.n_images, 
+        streams, repeat_run, ".csv", sep="_"), sep=" ")
+    ) %>%
+#    select(cmd) %>%
+#    as.data.frame()
+    rowwise() %>%
+    mutate(drop = system("sudo /sbin/sysctl vm.drop_caches=3")) %>%
+    mutate(run.output = system(cmd))
+
+#+end_src
+
+#+RESULTS:
+#+begin_example
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+vm.drop_caches = 3
+# A tibble: 280 x 10
+# Rowwise: 
+   streams batch_size repeat_run run.n_images machine gpu_bin  images_path cmd  
+     <
+     <
+     <
+       <
+<
+  <
+   <
+      <chr>
+ 1       1          1          1         1500 tupi1   /home/u… /tmp/2020/  /hom…
+ 2       1          1          2         1500 tupi1   /home/u… /tmp/2020/  /hom…
+ 3       1          1          3         1500 tupi1   /home/u… /tmp/2020/  /hom…
+ 4       1          1          4         1500 tupi1   /home/u… /tmp/2020/  /hom…
+ 5       1          1          5         1500 tupi1   /home/u… /tmp/2020/  /hom…
+ 6       1          1          6         1500 tupi1   /home/u… /tmp/2020/  /hom…
+ 7       1          1          7         1500 tupi1   /home/u… /tmp/2020/  /hom…
+ 8       1          1          8         1500 tupi1   /home/u… /tmp/2020/  /hom…
+ 9       1          1          9         1500 tupi1   /home/u… /tmp/2020/  /hom…
+10       1          1         10         1500 tupi1   /home/u… /tmp/2020/  /hom…
+# … with 270 more rows, and 2 more variables: drop <int>, run.output <int>
+#+end_example
+
+** read output csv files
+#+begin_src R :results output :exports both :session *R*
+csv_path <- "~/pheno-on-GPU/"
+
+df <- tibble()
+batch_size = 10
+total_images = 1500
+
+for(stream in  2**seq(0, 6)){
+  for (batch_size in c(1, 10, 100, 500)){
+    for (repeat_run in seq(1, 10)){
+
+    read_csv(paste0(csv_path, "tupi1_", batch_size, "_", total_images, "_", stream, "_", repeat_run, "_.csv")) %>%
+      as_tibble() %>% 
+      mutate(streams = stream, batch_size = batch_size, repeat_run = repeat_run) -> new
+
+     bind_rows(df, new) -> df
+  }
+ }
+}
+  
+df %>% 
+  write_csv("/home/users/bsalves/pheno-on-GPU/stream_test.csv")
+
+#+end_src
+
+#+RESULTS:
+#+begin_example
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+
+
+── Column specification ─────────────────────────────────────────────────────────────────────────
+cols(
+  decode_time = col_double()
+)
+#+end_example
+
+** calculate times
+#+begin_src R :results output :exports both :session *R*
+df %>%
+  group_by(streams, batch_size) %>%
+  summarize(
+    .groups="keep",
+    decode_time.avg = mean(decode_time)
+  ) %>%
+  arrange(decode_time.avg) %>%
+  as.data.frame
+  
+#  filter(!is.na(decode_time)) %>%
+#  arrange(decode_time) %>%
+#  as.data.frame
+#+end_src
+
+#+RESULTS:
+#+begin_example
+   streams batch_size decode_time.avg
+1       32          1         5213844
+2        8          1         5214456
+3       64          1         5219768
+4        2          1         5219843
+5        4          1         5221365
+6       16          1         5233042
+7        1          1         5247305
+8        1         10         5367866
+9       32         10         5370937
+10       8         10         5373432
+11      64         10         5386156
+12       2         10         5386199
+13       4         10         5387507
+14      16        500         5397672
+15      16         10         5404154
+16       2        500         5408934
+17       8        500         5410030
+18      32        500         5410412
+19      64        500         5411341
+20       1        500         5413780
+21       4        500         5432132
+22      64        100         5464988
+23      16        100         5466180
+24       8        100         5467392
+25       2        100         5467779
+26       1        100         5471734
+27      32        100         5480965
+28       4        100         5520841
+#+end_example
+
+** stream test load csv
+#+begin_src R :results output :exports both :session *R-local*
+options(crayon.enabled=FALSE)
+library(tidyverse)
+
+read_csv("./stream_test.csv") %>%
+  as_tibble() %>%
+  group_by(streams, batch_size) %>%
+  summarize(
+    .groups="keep",
+    decode_time.avg = mean(decode_time)
+  ) %>%
+  arrange(decode_time.avg) -> stream.plot
+#+end_src
+
+#+RESULTS:
+: indexing stream_test.csv [================================] 374.13MB/s, eta:  0s                                                                                Rows: 280 Columns: 4
+: ── Column specification ────────────────────────────────────────────────────────────────────────────
+: Delimiter: ","
+: dbl (4): decode_time, streams, batch_size, repeat_run
+: 
+: ℹ Use `spec()` to retrieve the full column specification for this data.
+: ℹ Specify the column types or set `show_col_types = FALSE` to quiet this message.
+
+** stream test plot
+#+begin_src R :results output file graphics :file (concat "~/R-images/image-" (replace-regexp-in-string " " "_" (nth 4 (org-heading-components))) ".png") :exports both :width 600 :height 400 :session *R-local*
+stream.plot %>%
+  mutate(streams = as.integer(streams)) %>%
+  mutate(streams = log2(streams)) %>%
+  ggplot(aes(streams, decode_time.avg / 1000)) +
+#  geom_point(aes(x=streams, y=decode_time.avg / 1000, colour=as.factor(batch_size))) + 
+#  geom_line(aes(x=streams, y=decode_time.avg / 1000, colour=as.factor(batch_size))) + 
+  geom_col(aes(colour=as.factor(batch_size)) + 
+  theme_bw(base_size=16) +
+  theme(
+#    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+#    panel.border = element_blank(),
+#    panel.background = element_blank()
+  ) +
+  scale_x_continuous(
+     breaks = c(0, 1, 2, 3, 4, 5, 6),
+    labels = c(1, 2, 4, 8, 16, 32, 64)
+  ) + 
+  xlab("Number of streams") + 
+  ylab("Decode Time (ms)") -> p
+#  facet_wrap(~batch_size) -> p
+#  labs(fill="Batch size") -> p
+
+p
+
+#p
+#     ggsave(
+#       "~/Documents/mestrado/CMP270/primeiros_resultados/stream-test.pdf",
+#       plot = p,
+#       width = 8,
+#       height = 4,
+#     )
+
+
+#+end_src
+
+#+RESULTS:
+[[file:~/R-images/image-stream_test_plot.png]]
+
+* CPU x GPU
+
+#+begin_src R :results output :exports both :session *R-local*
+read_csv("GPU_tupi1.csv") %>%
+  as_tibble() -> df.gpu
+
+read_csv("CPU_tupi1.csv") %>%
+  as_tibble() -> df.cpu
+
+#+end_src
+
+#+RESULTS:
+#+begin_example
+indexing GPU_tupi1.csv [===================================] 49.04MB/s, eta:  0s                                                                                Rows: 16 Columns: 8
+── Column specification ─────────────────────────────────────────────────────────────────────────
+Delimiter: ","
+chr (1): machine
+dbl (7): run.n_images, fread_time, decode_time, calc_time, fread_time.by_ima...
+
+ℹ Use `spec()` to retrieve the full column specification for this data.
+ℹ Specify the column types or set `show_col_types = FALSE` to quiet this message.
+indexing CPU_tupi1.csv [===================================] 73.13MB/s, eta:  0s                                                                                Rows: 16 Columns: 6
+── Column specification ─────────────────────────────────────────────────────────────────────────
+Delimiter: ","
+chr (1): machine
+dbl (5): run.n_images, decode_time, calc_time, decode_time.by_image, calc_ti...
+
+ℹ Use `spec()` to retrieve the full column specification for this data.
+ℹ Specify the column types or set `show_col_types = FALSE` to quiet this message.
+#+end_example
+
+
+#+begin_src R :results output file graphics :file (concat "~/R-images/image-" (replace-regexp-in-string " " "_" (nth 4 (org-heading-components))) ".png") :exports both :width 800 :height 400 :session *R-local*
+library(patchwork)
+ 
+bind_rows(
+  df.gpu %>%
+#    select(-contains("by_image")) %>%
+    select(-contains(".by_image")) %>%
+    mutate(decode_time = decode_time + fread_time) %>%
+    select(-fread_time) %>%
+    mutate(type = "GPU - batch = 1") %>%
+    pivot_longer(
+        cols = contains("time"),
+        names_to = "operation",
+        values_to = "time"
+    ), 
+  df.cpu %>%
+    mutate(type = "CPU - 1 core") %>%
+    select(-contains(".by_image")) %>%
+    pivot_longer(
+        cols = contains("time"),
+        names_to = "operation",
+        values_to = "time"
+    )
+) %>%
+  mutate(Type = paste(type, operation, sep=" -- ")) %>%
+  ggplot() +
+  geom_point(aes(x=run.n_images, y=time, colour=type)) + 
+  geom_line(aes(x=run.n_images, y=time, colour=type)) + 
+  theme_bw(base_size=16) +
+  facet_wrap(~operation,scales = "free") +
+  xlab("Number of images") + 
+  ylab("Time in microseconds")
+
+#+end_src
+
+#+RESULTS:
+[[file:~/R-images/image-CPU_x_GPU.png]]
+
+* CPU x GPU porcentagem
+#+begin_src R :results output file graphics :file (concat "~/R-images/image-" (replace-regexp-in-string " " "_" (nth 4 (org-heading-components))) ".png") :exports both :width 600 :height 400 :session *R-local*
+bind_rows(
+  df.gpu %>%
+#    select(-contains("by_image")) %>%
+    select(-contains(".by_image")) %>%
+    mutate(decode_time = decode_time + fread_time) %>%
+    select(-fread_time) %>%
+    mutate(type = "GPU - batch = 1") %>%
+    pivot_longer(
+        cols = contains("time"),
+        names_to = "operation",
+        values_to = "time"
+    ), 
+  df.cpu %>%
+    mutate(type = "CPU - 1 core") %>%
+    select(-contains(".by_image")) %>%
+    pivot_longer(
+        cols = contains("time"),
+        names_to = "operation",
+        values_to = "time"
+    )
+) %>%
+  mutate(Type = paste(type, operation, sep=" -- ")) %>%
+  ggplot() +
+  geom_point(aes(x=run.n_images, y=time / 1000, colour=type)) + 
+  geom_line(aes(x=run.n_images, y=time  / 1000, colour=type)) + 
+  theme_bw(base_size=16) +
+  theme(legend.position = "top") + 
+  facet_wrap(~operation,scales = "free") +
+  xlab("Number of images") + 
+  labs(colour="Type:") +
+  ylab("Time (ms)") -> a
+
+left_join(
+  df.cpu %>%
+    select(-contains(".by_image")) %>%
+    pivot_longer(
+        cols = contains("time"),
+        names_to = "operation",
+        values_to = "cpu.time"
+    ), 
+
+  df.gpu %>%
+    select(-contains(".by_image")) %>%
+    mutate(decode_time = decode_time + fread_time) %>%
+    select(-fread_time) %>%
+    pivot_longer(
+        cols = contains("time"),
+        names_to = "operation",
+        values_to = "gpu.time"
+    )
+) %>%
+  mutate(times_faster = cpu.time / gpu.time) %>%
+  ggplot() +
+  geom_point(aes(x=run.n_images, y=times_faster)) + 
+  geom_line(aes(x=run.n_images, y=times_faster)) + 
+  theme_bw(base_size=16) +
+  facet_wrap(~operation,scales = "free") +
+  xlab("Number of images") + 
+  ylab("CPU time / GPU time") -> b
+
+#(a + theme(axis.title.x=element_blank()) ) / b
+
+     ggsave(
+       "~/Documents/mestrado/CMP270/primeiros_resultados/cpu_gpu.pdf",
+       plot = (a + theme(axis.title.x=element_blank()) ) / b,
+       width = 8,
+       height = 6,
+     )
+#+end_src
+
+#+RESULTS:
+[[file:~/R-images/image-CPU_x_GPU_porcentagem.png]]
+
+* Traces 
+** Read csv
+#+begin_src R :results output :exports both :session *R-local*
+options(crayon.enabled=FALSE)
+library(tidyverse)
+
+read_csv("./traces/trace_10_100_1.csv", col_names=FALSE) %>%
+  as_tibble() -> df.1
+
+read_csv("./traces/trace_10_100_2.csv", col_names=FALSE) %>%
+  as_tibble() -> df.2
+
+read_csv("./traces/trace_1_1500_16.csv", col_names=FALSE) %>%
+  as_tibble() -> df.16
+#+end_src
+
+#+RESULTS:
+#+begin_example
+indexing trace_10_100_1.csv [==============================] 29.97GB/s, eta:  0s                                                                                Rows: 15448 Columns: 5
+── Column specification ────────────────────────────────────────────────────────────────────────────
+Delimiter: ","
+chr (1): X5
+dbl (4): X1, X2, X3, X4
+
+ℹ Use `spec()` to retrieve the full column specification for this data.
+ℹ Specify the column types or set `show_col_types = FALSE` to quiet this message.
+indexing trace_10_100_2.csv [==============================] 65.86GB/s, eta:  0s                                                                                Rows: 15450 Columns: 5
+── Column specification ────────────────────────────────────────────────────────────────────────────
+Delimiter: ","
+chr (1): X5
+dbl (4): X1, X2, X3, X4
+
+ℹ Use `spec()` to retrieve the full column specification for this data.
+ℹ Specify the column types or set `show_col_types = FALSE` to quiet this message.
+indexing trace_1_1500_16.csv [==========-------------------] 88.74GB/s, eta:  0sindexing trace_1_1500_16.csv [============================] 503.04MB/s, eta:  0s                                                                                Rows: 247558 Columns: 5
+── Column specification ────────────────────────────────────────────────────────────────────────────
+Delimiter: ","
+chr (1): X5
+dbl (4): X1, X2, X3, X4
+
+ℹ Use `spec()` to retrieve the full column specification for this data.
+ℹ Specify the column types or set `show_col_types = FALSE` to quiet this message.
+#+end_example
+
+
+** Data handling
+#+begin_src R :results output :exports both :session *R-local*
+df.16 %>%
+  rename(
+    start = X1,
+    end = X2,
+    operation = X5
+  ) %>% 
+  filter(grepl("nvjpeg", operation) == TRUE) %>%
+  mutate(operation = gsub("<.*>", "",operation)) -> df.1.nvjpeg
+#  as.data.frame
+#+end_src
+
+#+RESULTS:
+** Gantt chart
+#+begin_src R :results output file graphics :file (concat "~/R-images/image-" (replace-regexp-in-string " " "_" (nth 4 (org-heading-components))) ".png") :exports both :width 600 :height 400 :session *R-local*
+
+
+
+df.16 %>%
+  rename(
+    start = X1,
+    end = X2,
+    duration = X3,
+    device = X4,
+    operation = X5
+  ) %>% 
+  filter(grepl("cudaOccupancy", operation) == FALSE) %>%
+  filter(grepl("cuda", operation) == FALSE) %>% 
+  mutate(operation = gsub("BUFFER FLUSH", "BUFFER\nFLUSH",operation)) %>%
+  mutate(operation = gsub("::.*>", "",operation)) %>%
+  ggplot(aes(xmin = start, xmax = end, ymin = 0, ymax = 1, fill = as.factor(operation))) + 
+  geom_rect(color="black") +
+  theme_bw(base_size=16) + 
+  facet_wrap(~operation, ncol=1) + 
+  xlab("Time") +
+  theme(
+    axis.title.y=element_blank(),
+    axis.text.y=element_blank(),
+    axis.ticks.y=element_blank(),
+  ) + 
+  labs(fill="Operation") -> p
+
+     ggsave(
+       "~/Documents/mestrado/CMP270/primeiros_resultados/images/gantt.pdf",
+       plot = p,
+       width = 8,
+       height = 6,
+     )
+
+
+#+end_src
+
+#+RESULTS:
+[[file:~/R-images/image-Gantt_chart.png]]
+
+* Traces with nsys
+** Run tests
+#+begin_src bash
+# First copy data to tmp
+# cp -r ~/Cerrado/ePhenology_phenocam_CORE_2011-2020/2020/ /tmp
+# Run nsys profile 
+# Using one stream
+sudo /sbin/sysctl vm.drop_caches=3
+/usr/local/cuda/bin/nsys profile run /tmp/2020/ 1 1500 1
+sudo /sbin/sysctl vm.drop_caches=3
+/usr/local/cuda/bin/nsys profile run /tmp/2020/ 100 1500 1
+sudo /sbin/sysctl vm.drop_caches=3
+/usr/local/cuda/bin/nsys profile run /tmp/2020/ 500 1500 1
+# Using multiple streams
+sudo /sbin/sysctl vm.drop_caches=3
+/usr/local/cuda/bin/nsys profile run /tmp/2020/ 1 1500 4
+sudo /sbin/sysctl vm.drop_caches=3
+/usr/local/cuda/bin/nsys profile run /tmp/2020/ 100 1500 4
+sudo /sbin/sysctl vm.drop_caches=3
+/usr/local/cuda/bin/nsys profile run /tmp/2020/ 500 1500 4
+#+end_src
+
+** Traces description
+|----------------------+------------+--------------+-----------|
+| file                 | batch size | total images | n streams |
+|----------------------+------------+--------------+-----------|
+| traces/report1.qdrep |          1 |         1500 |         1 |
+| traces/report2.qdrep |        100 |         1500 |         1 |
+| traces/report3.qdrep |        500 |         1500 |         1 |
+| traces/report4.qdrep |          1 |         1500 |         4 |
+| traces/report5.qdrep |        100 |         1500 |         4 |
+| traces/report6.qdrep |        500 |         1500 |         4 |
+|----------------------+------------+--------------+-----------|
+
+* nvJPEG with Decoupled phases 
+- Below is the sequence of API calls to decode a single image
+  1. Initialize all the items that are used in the decoding process:
+     - [X] Create the library handle using one of the library handle initialization routines.
+     - [X] Choose decoder implementation nvjpegBackend_t, and create decoder using nvjpegDecoderCreate().
+     - [X] Create JPEG decoder state using nvjpegDecoderStateCreate().
+     - [X] Create JPEG stream using nvjpegJpegStreamCreate().
+     - [X] Create the pinned and device buffers used by the decoder using the below APIs respectively. These buffers are used to store intermediate decoding results.
+         nvjpegBufferPinnedCreate()
+         nvjpegBufferDeviceCreate()
+     - [X] Link the buffers to the JPEG state using the below APIs respectively:
+         nvjpegStateAttachPinnedBuffer()
+         nvjpegStateAttachDeviceBuffer()
+     - [X] Create decode parameters using the below API. This is used to set the output format, and enable ROI decode:
+
+         nvjpegDecodeParamsCreate()
+  2. Perform decoding:
+     - [ ] Parse the jpeg bit-stream using nvjpegJpegStreamParse()
+             Encoded bitstream information, like channel dimensions, can be retrieved using the below API. This information is used to allocate the output pointers in nvjpegImage_t.
+
+                 nvjpegJpegStreamGetComponentsNum()
+
+                 nvjpegJpegStreamGetComponentDimensions()
+     - [ ] Call the decode API in the below sequence to decode the image:
+             nvjpegDecodeJpegHost()
+             nvjpegDecodeJpegTransferToDevice()
+             nvjpegDecodeJpegDevice()
+
+
+* Projeto código final 
+- main
+- gpu_decode.h
+- gpu_decode.cu
+
+process_on_GPU():
+args: vetor de string com os path das imagens
+return: vetor com as médias de cada canal
+
+Etapas da process_on_GPU():
+- Start nvjpeg structs
+- create GPU streams
+- load images into memory
+- allocate output structs
+- DecodeHost
+- TransferToDevice
+- DecodeDevice
+- Average values with Thrust
+- Free GPU memory
+- delete GPU streams
+
+
+Memory
+input images 
+output images
+processing buffers
+thrust vector 

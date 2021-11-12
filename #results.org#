@@ -1,0 +1,605 @@
+* Load library
+#+begin_src R :results output :exports both :session *R-local*
+options(crayon.enabled=FALSE)
+library("tidyverse")
+#+end_src
+
+#+RESULTS:
+
+* RGB values 
+** Average values
+*** Read CSV
+#+begin_src R :results output :exports both :session *R-local*
+read_csv("./rgb_values/CPU_avg_values.csv", show_col_types = FALSE) %>% 
+  as_tibble() -> CPU.avg
+
+read_csv("./rgb_values/GPU_avg_values.csv", show_col_types = FALSE) %>% 
+  as_tibble() -> GPU.avg
+
+CPU.avg
+GPU.avg
+
+#+end_src
+
+#+RESULTS:
+#+begin_example
+indexing CPU_avg_values.csv [===============================] 2.35GB/s, eta:  0s
+indexing GPU_avg_values.csv [===============================] 1.73GB/s, eta:  0s
+# A tibble: 500 × 5
+   image_id image_name                      R     G     B
+      <
+<
+                      <
+<
+<dbl>
+ 1        0 /tmp/2020/2020_008_13_4.jpg  95.1  91.4  85.2
+ 2        1 /tmp/2020/2020_001_16_2.jpg  95.1  92.2  86.0
+ 3        2 /tmp/2020/2020_012_06_2.jpg 102.   97.9 106. 
+ 4        3 /tmp/2020/2020_022_12_2.jpg  90.0  86.4  81.7
+ 5        4 /tmp/2020/2020_049_17_2.jpg  95.2  89.0  80.8
+ 6        5 /tmp/2020/2020_019_12_4.jpg  92.0  88.4  82.9
+ 7        6 /tmp/2020/2020_036_16_4.jpg  93.0  89.1  84.3
+ 8        7 /tmp/2020/2020_015_11_2.jpg  89.2  84.8  78.8
+ 9        8 /tmp/2020/2020_018_15_4.jpg  95.6  92.1  87.0
+10        9 /tmp/2020/2020_037_17_4.jpg  93.7  90.6  85.9
+# … with 490 more rows
+# A tibble: 500 × 5
+   image_id image_name                      R     G     B
+      <
+<
+                      <
+<
+<dbl>
+ 1        0 /tmp/2020/2020_008_13_4.jpg  94.8  91.1  84.8
+ 2        1 /tmp/2020/2020_001_16_2.jpg  94.8  91.8  85.6
+ 3        2 /tmp/2020/2020_012_06_2.jpg 101.   97.6 106. 
+ 4        3 /tmp/2020/2020_022_12_2.jpg  89.7  86.0  81.3
+ 5        4 /tmp/2020/2020_049_17_2.jpg  94.9  88.7  80.4
+ 6        5 /tmp/2020/2020_019_12_4.jpg  91.6  88.1  82.6
+ 7        6 /tmp/2020/2020_036_16_4.jpg  92.7  88.7  83.9
+ 8        7 /tmp/2020/2020_015_11_2.jpg  88.8  84.4  78.4
+ 9        8 /tmp/2020/2020_018_15_4.jpg  95.2  91.8  86.6
+10        9 /tmp/2020/2020_037_17_4.jpg  93.4  90.3  85.5
+# … with 490 more rows
+#+end_example
+
+*** Plot R,G,B avg values
+#+begin_src R :results output file graphics :file (concat "~/R-images/image-" (replace-regexp-in-string " " "_" (nth 4 (org-heading-components))) ".png") :exports both :width 600 :height 400 :session *R-local*
+GPU.avg %>%
+  rename(
+    R.gpu = R,
+    G.gpu = G,
+    B.gpu = B,
+  ) %>%
+  left_join(
+    CPU.avg %>%
+     rename(
+      R.cpu = R,
+      G.cpu = G,
+      B.cpu = B,
+    ),
+    by = c("image_id", "image_name")
+  ) %>%
+  ggplot() + 
+  geom_point(aes(x=image_id, y=R.cpu), color="red") +  
+  geom_point(aes(x=image_id, y=R.gpu), color="black")   
+
+
+#+end_src
+
+#+RESULTS:
+[[file:~/R-images/image-Plot_R,G,B_avg_values.png]]
+
+*** Calculate diff
+#+begin_src R :results output :exports both :session *R-local*
+GPU.avg %>%
+  rename(
+    R.gpu = R,
+    G.gpu = G,
+    B.gpu = B,
+  ) %>%
+  left_join(
+    CPU.avg %>%
+     rename(
+      R.cpu = R,
+      G.cpu = G,
+      B.cpu = B,
+    ),
+    by = c("image_id", "image_name")
+  ) %>%
+  mutate(
+    R.diff = R.gpu - R.cpu,
+    G.diff = G.gpu - G.cpu,
+    B.diff = B.gpu - B.cpu,
+  ) %>%
+  select(-ends_with("gpu"), -ends_with("cpu")) %>%
+  pivot_longer(
+        cols = ends_with("diff"),
+        names_to = "channel",
+        values_to = "diff",
+  ) -> diff.df
+#+end_src
+
+#+RESULTS:
+
+*** CPU GPU avg diff 
+#+begin_src R :results output file graphics :file (concat "~/R-images/image-" (replace-regexp-in-string " " "_" (nth 4 (org-heading-components))) ".png") :exports both :width 600 :height 400 :session *R-local*
+
+diff.df %>%
+  ggplot() +
+  geom_point(aes(x=image_id, y=diff, colour=channel))
+#+end_src
+
+#+RESULTS:
+[[file:~/R-images/image-CPU_GPU_avg_diff.png]]
+
+** Pixel values
+*** Read CSV
+#+begin_src R :results output :exports both :session *R-local*
+read_csv("./rgb_values/CPU_pixel_values.csv", show_col_types = FALSE) %>% 
+  as_tibble() -> CPU.pixel
+
+read_csv("./rgb_values/GPU_pixel_values.csv", show_col_types = FALSE) %>% 
+  as_tibble() -> GPU.pixel
+
+CPU.pixel
+GPU.pixel
+#+end_src
+
+#+RESULTS:
+#+begin_example
+indexing CPU_pixel_values.csv [---------------------------] 415.23GB/s, eta:  0sindexing CPU_pixel_values.csv [==-------------------------] 165.84MB/s, eta:  3sindexing CPU_pixel_values.csv [===------------------------] 172.98MB/s, eta:  3sindexing CPU_pixel_values.csv [===------------------------] 179.80MB/s, eta:  3sindexing CPU_pixel_values.csv [====-----------------------] 150.40MB/s, eta:  4sindexing CPU_pixel_values.csv [====-----------------------] 158.16MB/s, eta:  3sindexing CPU_pixel_values.csv [====-----------------------] 164.80MB/s, eta:  3sindexing CPU_pixel_values.csv [=====----------------------] 143.18MB/s, eta:  4sindexing CPU_pixel_values.csv [=====----------------------] 148.09MB/s, eta:  3sindexing CPU_pixel_values.csv [=====----------------------] 154.01MB/s, eta:  3sindexing CPU_pixel_values.csv [=====----------------------] 157.87MB/s, eta:  3sindexing CPU_pixel_values.csv [======---------------------] 136.77MB/s, eta:  4sindexing CPU_pixel_values.csv [======---------------------] 141.65MB/s, eta:  3sindexing CPU_pixel_values.csv [======---------------------] 151.16MB/s, eta:  3sindexing CPU_pixel_values.csv [=======--------------------] 133.67MB/s, eta:  3sindexing CPU_pixel_values.csv [=======--------------------] 136.43MB/s, eta:  3sindexing CPU_pixel_values.csv [========-------------------] 135.62MB/s, eta:  3sindexing CPU_pixel_values.csv [========-------------------] 122.68MB/s, eta:  4sindexing CPU_pixel_values.csv [========-------------------] 128.40MB/s, eta:  3sindexing CPU_pixel_values.csv [=========------------------] 129.12MB/s, eta:  3sindexing CPU_pixel_values.csv [=========------------------] 126.03MB/s, eta:  3sindexing CPU_pixel_values.csv [=========------------------] 125.52MB/s, eta:  3sindexing CPU_pixel_values.csv [==========-----------------] 130.01MB/s, eta:  3sindexing CPU_pixel_values.csv [==========-----------------] 125.21MB/s, eta:  3sindexing CPU_pixel_values.csv [==========-----------------] 124.78MB/s, eta:  3sindexing CPU_pixel_values.csv [===========----------------] 128.02MB/s, eta:  3sindexing CPU_pixel_values.csv [===========----------------] 126.79MB/s, eta:  3sindexing CPU_pixel_values.csv [===========----------------] 125.43MB/s, eta:  3sindexing CPU_pixel_values.csv [============---------------] 127.63MB/s, eta:  3sindexing CPU_pixel_values.csv [============---------------] 127.57MB/s, eta:  3sindexing CPU_pixel_values.csv [============---------------] 126.99MB/s, eta:  3sindexing CPU_pixel_values.csv [============---------------] 126.85MB/s, eta:  3sindexing CPU_pixel_values.csv [=============--------------] 127.67MB/s, eta:  3sindexing CPU_pixel_values.csv [=============--------------] 127.45MB/s, eta:  3sindexing CPU_pixel_values.csv [=============--------------] 127.26MB/s, eta:  2sindexing CPU_pixel_values.csv [==============-------------] 126.64MB/s, eta:  2sindexing CPU_pixel_values.csv [==============-------------] 127.91MB/s, eta:  2sindexing CPU_pixel_values.csv [==============-------------] 126.71MB/s, eta:  2sindexing CPU_pixel_values.csv [==============-------------] 128.09MB/s, eta:  2sindexing CPU_pixel_values.csv [===============------------] 125.73MB/s, eta:  2sindexing CPU_pixel_values.csv [===============------------] 126.38MB/s, eta:  2sindexing CPU_pixel_values.csv [===============------------] 125.94MB/s, eta:  2sindexing CPU_pixel_values.csv [===============------------] 125.21MB/s, eta:  2sindexing CPU_pixel_values.csv [================-----------] 124.12MB/s, eta:  2sindexing CPU_pixel_values.csv [================-----------] 124.58MB/s, eta:  2sindexing CPU_pixel_values.csv [================-----------] 125.67MB/s, eta:  2sindexing CPU_pixel_values.csv [=================----------] 123.68MB/s, eta:  2sindexing CPU_pixel_values.csv [=================----------] 125.79MB/s, eta:  2sindexing CPU_pixel_values.csv [==================---------] 126.02MB/s, eta:  2sindexing CPU_pixel_values.csv [==================---------] 124.03MB/s, eta:  2sindexing CPU_pixel_values.csv [==================---------] 126.01MB/s, eta:  2sindexing CPU_pixel_values.csv [===================--------] 126.25MB/s, eta:  2sindexing CPU_pixel_values.csv [===================--------] 124.98MB/s, eta:  1sindexing CPU_pixel_values.csv [===================--------] 125.88MB/s, eta:  1sindexing CPU_pixel_values.csv [===================--------] 125.36MB/s, eta:  1sindexing CPU_pixel_values.csv [====================-------] 126.63MB/s, eta:  1sindexing CPU_pixel_values.csv [====================-------] 124.89MB/s, eta:  1sindexing CPU_pixel_values.csv [====================-------] 125.67MB/s, eta:  1sindexing CPU_pixel_values.csv [=====================------] 124.74MB/s, eta:  1sindexing CPU_pixel_values.csv [=====================------] 124.64MB/s, eta:  1sindexing CPU_pixel_values.csv [=====================------] 121.54MB/s, eta:  1sindexing CPU_pixel_values.csv [=====================------] 122.42MB/s, eta:  1sindexing CPU_pixel_values.csv [======================-----] 122.61MB/s, eta:  1sindexing CPU_pixel_values.csv [======================-----] 120.60MB/s, eta:  1sindexing CPU_pixel_values.csv [=======================----] 122.96MB/s, eta:  1sindexing CPU_pixel_values.csv [=======================----] 121.87MB/s, eta:  1sindexing CPU_pixel_values.csv [=======================----] 119.92MB/s, eta:  1sindexing CPU_pixel_values.csv [========================---] 122.42MB/s, eta:  1sindexing CPU_pixel_values.csv [========================---] 121.69MB/s, eta:  1sindexing CPU_pixel_values.csv [========================---] 119.69MB/s, eta:  1sindexing CPU_pixel_values.csv [=========================--] 120.67MB/s, eta:  0sindexing CPU_pixel_values.csv [=========================--] 121.69MB/s, eta:  0sindexing CPU_pixel_values.csv [=========================--] 118.84MB/s, eta:  0sindexing CPU_pixel_values.csv [==========================-] 119.67MB/s, eta:  0sindexing CPU_pixel_values.csv [==========================-] 121.04MB/s, eta:  0sindexing CPU_pixel_values.csv [==========================-] 119.04MB/s, eta:  0sindexing CPU_pixel_values.csv [===========================] 121.11MB/s, eta:  0s
+indexing GPU_pixel_values.csv [---------------------------] 443.17GB/s, eta:  0sindexing GPU_pixel_values.csv [=--------------------------] 134.94MB/s, eta:  4sindexing GPU_pixel_values.csv [==-------------------------] 155.00MB/s, eta:  4sindexing GPU_pixel_values.csv [==-------------------------] 162.35MB/s, eta:  4sindexing GPU_pixel_values.csv [==-------------------------] 171.61MB/s, eta:  3sindexing GPU_pixel_values.csv [==-------------------------] 126.66MB/s, eta:  4sindexing GPU_pixel_values.csv [===------------------------] 146.00MB/s, eta:  4sindexing GPU_pixel_values.csv [===------------------------] 140.76MB/s, eta:  4sindexing GPU_pixel_values.csv [====-----------------------] 115.52MB/s, eta:  5sindexing GPU_pixel_values.csv [====-----------------------] 127.48MB/s, eta:  4sindexing GPU_pixel_values.csv [====-----------------------] 124.50MB/s, eta:  4sindexing GPU_pixel_values.csv [=====----------------------] 117.52MB/s, eta:  4sindexing GPU_pixel_values.csv [=====----------------------] 122.63MB/s, eta:  4sindexing GPU_pixel_values.csv [======---------------------] 118.70MB/s, eta:  4sindexing GPU_pixel_values.csv [======---------------------] 126.12MB/s, eta:  4sindexing GPU_pixel_values.csv [======---------------------] 116.73MB/s, eta:  4sindexing GPU_pixel_values.csv [=======--------------------] 116.38MB/s, eta:  4sindexing GPU_pixel_values.csv [=======--------------------] 119.42MB/s, eta:  4sindexing GPU_pixel_values.csv [========-------------------] 114.82MB/s, eta:  4sindexing GPU_pixel_values.csv [========-------------------] 116.11MB/s, eta:  4sindexing GPU_pixel_values.csv [=========------------------] 112.78MB/s, eta:  4sindexing GPU_pixel_values.csv [=========------------------] 118.86MB/s, eta:  3sindexing GPU_pixel_values.csv [==========-----------------] 113.73MB/s, eta:  4sindexing GPU_pixel_values.csv [==========-----------------] 118.76MB/s, eta:  3sindexing GPU_pixel_values.csv [===========----------------] 112.63MB/s, eta:  3sindexing GPU_pixel_values.csv [===========----------------] 114.73MB/s, eta:  3sindexing GPU_pixel_values.csv [===========----------------] 116.04MB/s, eta:  3sindexing GPU_pixel_values.csv [============---------------] 117.91MB/s, eta:  3sindexing GPU_pixel_values.csv [============---------------] 112.72MB/s, eta:  3sindexing GPU_pixel_values.csv [============---------------] 114.81MB/s, eta:  3sindexing GPU_pixel_values.csv [============---------------] 115.95MB/s, eta:  3sindexing GPU_pixel_values.csv [=============--------------] 116.18MB/s, eta:  3sindexing GPU_pixel_values.csv [=============--------------] 112.35MB/s, eta:  3sindexing GPU_pixel_values.csv [=============--------------] 114.20MB/s, eta:  3sindexing GPU_pixel_values.csv [==============-------------] 115.25MB/s, eta:  3sindexing GPU_pixel_values.csv [==============-------------] 114.46MB/s, eta:  3sindexing GPU_pixel_values.csv [==============-------------] 112.78MB/s, eta:  3sindexing GPU_pixel_values.csv [==============-------------] 114.47MB/s, eta:  3sindexing GPU_pixel_values.csv [===============------------] 115.68MB/s, eta:  2sindexing GPU_pixel_values.csv [===============------------] 112.61MB/s, eta:  2sindexing GPU_pixel_values.csv [===============------------] 112.40MB/s, eta:  2sindexing GPU_pixel_values.csv [===============------------] 113.93MB/s, eta:  2sindexing GPU_pixel_values.csv [================-----------] 114.80MB/s, eta:  2sindexing GPU_pixel_values.csv [================-----------] 110.65MB/s, eta:  2sindexing GPU_pixel_values.csv [================-----------] 111.58MB/s, eta:  2sindexing GPU_pixel_values.csv [=================----------] 112.90MB/s, eta:  2sindexing GPU_pixel_values.csv [=================----------] 110.83MB/s, eta:  2sindexing GPU_pixel_values.csv [=================----------] 112.14MB/s, eta:  2sindexing GPU_pixel_values.csv [==================---------] 114.30MB/s, eta:  2sindexing GPU_pixel_values.csv [==================---------] 111.56MB/s, eta:  2sindexing GPU_pixel_values.csv [==================---------] 112.52MB/s, eta:  2sindexing GPU_pixel_values.csv [===================--------] 113.47MB/s, eta:  2sindexing GPU_pixel_values.csv [===================--------] 114.20MB/s, eta:  2sindexing GPU_pixel_values.csv [===================--------] 111.75MB/s, eta:  2sindexing GPU_pixel_values.csv [====================-------] 112.77MB/s, eta:  1sindexing GPU_pixel_values.csv [====================-------] 111.50MB/s, eta:  1sindexing GPU_pixel_values.csv [=====================------] 112.67MB/s, eta:  1sindexing GPU_pixel_values.csv [=====================------] 112.12MB/s, eta:  1sindexing GPU_pixel_values.csv [=====================------] 113.07MB/s, eta:  1sindexing GPU_pixel_values.csv [=====================------] 111.71MB/s, eta:  1sindexing GPU_pixel_values.csv [======================-----] 112.34MB/s, eta:  1sindexing GPU_pixel_values.csv [======================-----] 112.79MB/s, eta:  1sindexing GPU_pixel_values.csv [======================-----] 112.21MB/s, eta:  1sindexing GPU_pixel_values.csv [=======================----] 113.15MB/s, eta:  1sindexing GPU_pixel_values.csv [=======================----] 112.32MB/s, eta:  1sindexing GPU_pixel_values.csv [=======================----] 112.02MB/s, eta:  1sindexing GPU_pixel_values.csv [=======================----] 112.30MB/s, eta:  1sindexing GPU_pixel_values.csv [========================---] 113.05MB/s, eta:  1sindexing GPU_pixel_values.csv [========================---] 112.64MB/s, eta:  1sindexing GPU_pixel_values.csv [========================---] 111.27MB/s, eta:  1sindexing GPU_pixel_values.csv [=========================--] 112.25MB/s, eta:  0sindexing GPU_pixel_values.csv [=========================--] 112.21MB/s, eta:  0sindexing GPU_pixel_values.csv [=========================--] 111.26MB/s, eta:  0sindexing GPU_pixel_values.csv [==========================-] 111.97MB/s, eta:  0sindexing GPU_pixel_values.csv [==========================-] 112.74MB/s, eta:  0sindexing GPU_pixel_values.csv [==========================-] 112.23MB/s, eta:  0sindexing GPU_pixel_values.csv [==========================-] 112.53MB/s, eta:  0sindexing GPU_pixel_values.csv [===========================] 110.76MB/s, eta:  0sindexing GPU_pixel_values.csv [===========================] 108.88MB/s, eta:  0s
+# A tibble: 24,576,000 × 6
+   image_id     x     y     R     G     B
+      <
+<
+<
+<
+<
+<dbl>
+ 1        0     0     0     0     0     0
+ 2        0     0     1     0     0     0
+ 3        0     0     2     0     0     0
+ 4        0     0     3     0     0     0
+ 5        0     0     4     0     0     0
+ 6        0     0     5     0     0     0
+ 7        0     0     6     0     0     0
+ 8        0     0     7     0     0     0
+ 9        0     0     8     0     0     0
+10        0     0     9     0     0     0
+# … with 24,575,990 more rows
+# A tibble: 24,576,000 × 6
+   image_id     x     y     R     G     B
+      <
+<
+<
+<
+<
+<dbl>
+ 1        0     0     0     0     0     0
+ 2        0     0     1     0     0     0
+ 3        0     0     2     0     0     0
+ 4        0     0     3     0     0     0
+ 5        0     0     4     0     0     0
+ 6        0     0     5     0     0     0
+ 7        0     0     6     0     0     0
+ 8        0     0     7     0     0     0
+ 9        0     0     8     0     0     0
+10        0     0     9     0     0     0
+# … with 24,575,990 more rows
+#+end_example
+
+*** Calculate diff R,G,B pixel values
+#+begin_src R :results output :exports both :session *R-local*
+CPU.pixel %>%
+  filter(image_id == 0) %>%
+  left_join(
+    GPU.pixel %>%
+      filter(image_id == 0),
+    by=c("image_id", "x", "y")
+  ) %>%
+  mutate(
+    R.diff = R.x - R.y,
+    G.diff = G.x - G.y,
+    B.diff = B.x - B.y,
+  ) %>% 
+  pivot_longer(
+        cols = ends_with("diff"),
+        names_to = "channel",
+        values_to = "diff",
+  ) -> pixel.diff
+#+end_src
+
+#+RESULTS:
+
+*** Reduce dataframe size
+#+begin_src R :results output :exports both :session *R-local*
+pixel.diff %>%
+#  filter(x %in% seq(1, 2000, 10)) %>%
+  filter(y %in% seq(1, 2000, 10)) -> pixel.diff.reduced
+
+#+end_src
+
+#+RESULTS:
+
+*** CPU GPU pixel diff plot
+#+begin_src R :results output file graphics :file (concat "~/R-images/image-" (replace-regexp-in-string " " "_" (nth 4 (org-heading-components))) ".png") :exports both :width 1000 :height 600 :session *R-local*
+#pixel.diff %>%
+pixel.diff.reduced %>%
+  filter(between(diff, -10, 10)) %>%
+  mutate(diff.signal = if_else(diff > 0, "+", "-")) %>%
+  ggplot(aes(x=x, y=y)) +
+  theme_bw(base_size = 16) + 
+  geom_tile(aes(colour=diff, fill=diff)) +
+  scale_colour_gradient2() +
+  scale_fill_gradient2() +
+  theme(
+#    panel.spacing=unit(0.4, "lines"),
+#    panel.margin=unit(0.4, "lines"),
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank()
+  ) +
+  facet_grid(diff.signal~channel) #+
+#  theme(legend.position = "none")
+#+end_src
+
+#+RESULTS:
+[[file:~/R-images/image-CPU_GPU_pixel_diff_plot.png]]
+
+
+* Traces 
+** Read CPU traces
+#+begin_src R :results output :exports both :session *R-local*
+n_images <- 5000
+
+CPU.traces <- tibble() 
+
+for(do_it_again in seq(1, 1, 1)){
+  for(thread in c(2 ** seq(0, 4))){
+      out_report_name <- paste("CPU", thread, n_images, do_it_again, sep="_")
+      print(out_report_name)
+      CPU.traces <- bind_rows(CPU.traces, CPU.traces %>% mutate(thread = thread))
+  }
+}
+
+#+end_src
+
+#+RESULTS:
+: [1] "CPU_1_5000_1"
+: [1] "CPU_2_5000_1"
+: [1] "CPU_4_5000_1"
+: [1] "CPU_8_5000_1"
+: [1] "CPU_16_5000_1"
+
+** Read GPU traces
+#+begin_src R :results output :exports both :session *R-local*
+n_images <- 5000
+
+GPU.traces <- tibble() 
+#for(do_it_again in seq(1, 10, 1)){
+for(do_it_again in seq(1, 1, 1)){    
+    for(batch in c(1, 500, 1000, 1200)){
+        for(stream in c(2 ** seq(0, 4))){
+        out_report_name <- paste("./traces/GPU", batch, n_images, stream, do_it_again, sep="_")
+        print(out_report_name)
+        
+        t <- as_tibble(read_csv(paste0(out_report_name, ".csv"), show_col_types = FALSE))     
+
+        bind_rows(
+            GPU.traces, 
+              t %>% 
+                mutate(
+                  batch = batch,
+                  stream = stream,
+                  do_it_again = do_it_again
+                )
+          ) -> GPU.traces
+        }
+    }        
+}
+
+#+end_src
+
+#+RESULTS:
+#+begin_example
+[1] "./traces/GPU_1_5000_1_1"
+indexing GPU_1_5000_1_1.csv [=============================] 112.14MB/s, eta:  0s                                                                                [1] "./traces/GPU_1_5000_2_1"
+indexing GPU_1_5000_2_1.csv [==============================] 92.18MB/s, eta:  0s                                                                                [1] "./traces/GPU_1_5000_4_1"
+indexing GPU_1_5000_4_1.csv [=============================] 115.63MB/s, eta:  0s                                                                                [1] "./traces/GPU_1_5000_8_1"
+indexing GPU_1_5000_8_1.csv [=============================] 111.37MB/s, eta:  0s                                                                                [1] "./traces/GPU_1_5000_16_1"
+indexing GPU_1_5000_16_1.csv [============================] 145.93MB/s, eta:  0s                                                                                [1] "./traces/GPU_500_5000_1_1"
+indexing GPU_500_5000_1_1.csv [============================] 95.37MB/s, eta:  0s                                                                                [1] "./traces/GPU_500_5000_2_1"
+indexing GPU_500_5000_2_1.csv [===========================] 132.69MB/s, eta:  0s                                                                                [1] "./traces/GPU_500_5000_4_1"
+indexing GPU_500_5000_4_1.csv [===========================] 115.45MB/s, eta:  0s                                                                                [1] "./traces/GPU_500_5000_8_1"
+indexing GPU_500_5000_8_1.csv [===========================] 151.28MB/s, eta:  0s                                                                                [1] "./traces/GPU_500_5000_16_1"
+indexing GPU_500_5000_16_1.csv [===========================] 40.21MB/s, eta:  0s                                                                                [1] "./traces/GPU_1000_5000_1_1"
+indexing GPU_1000_5000_1_1.csv [==========================] 133.20MB/s, eta:  0s                                                                                [1] "./traces/GPU_1000_5000_2_1"
+indexing GPU_1000_5000_2_1.csv [==========================] 129.28MB/s, eta:  0s                                                                                [1] "./traces/GPU_1000_5000_4_1"
+indexing GPU_1000_5000_4_1.csv [==========================] 115.45MB/s, eta:  0s                                                                                [1] "./traces/GPU_1000_5000_8_1"
+indexing GPU_1000_5000_8_1.csv [==========================] 133.20MB/s, eta:  0s                                                                                [1] "./traces/GPU_1000_5000_16_1"
+indexing GPU_1000_5000_16_1.csv [=========================] 115.45MB/s, eta:  0s                                                                                [1] "./traces/GPU_1200_5000_1_1"
+indexing GPU_1200_5000_1_1.csv [===========================] 95.65MB/s, eta:  0s                                                                                [1] "./traces/GPU_1200_5000_2_1"
+indexing GPU_1200_5000_2_1.csv [==========================] 129.41MB/s, eta:  0s                                                                                [1] "./traces/GPU_1200_5000_4_1"
+indexing GPU_1200_5000_4_1.csv [==========================] 129.41MB/s, eta:  0s                                                                                [1] "./traces/GPU_1200_5000_8_1"
+indexing GPU_1200_5000_8_1.csv [==========================] 115.67MB/s, eta:  0s                                                                                [1] "./traces/GPU_1200_5000_16_1"
+indexing GPU_1200_5000_16_1.csv [=========================] 133.07MB/s, eta:  0s
+#+end_example
+
+
+** GPU traces
+#+begin_src R :results output :exports both :session *R-local*
+GPU.traces %>% 
+  rename(percentage_time = 1, total_time = 2, round = do_it_again)%>%
+  select(percentage_time, total_time, Range, batch, stream, round) %>%
+#  filter(Range == "main") %>%
+  arrange(total_time) %>% 
+  as.data.frame()
+  
+#+end_src
+
+#+RESULTS:
+#+begin_example
+    percentage_time  total_time                Range batch stream round
+1               0.0      360281 malloc_output_buffer     1      1     1
+2               0.0      368196 malloc_output_buffer     1     16     1
+3               0.0      379313 malloc_output_buffer     1      8     1
+4               0.0      388126 malloc_output_buffer     1      2     1
+5               0.0      463768 malloc_output_buffer     1      4     1
+6               0.0      904053         ImageDecoder  1000      4     1
+7               0.0      906205         ImageDecoder  1000     16     1
+8               0.0      911419         ImageDecoder   500      1     1
+9               0.0      912944         ImageDecoder     1      2     1
+10              0.0      913312         ImageDecoder   500      8     1
+11              0.0      914586         ImageDecoder     1      8     1
+12              0.0      915053         ImageDecoder  1200      1     1
+13              0.0      917363         ImageDecoder   500     16     1
+14              0.0      918816         ImageDecoder  1200      8     1
+15              0.0      919068         ImageDecoder  1200      2     1
+16              0.0      923509         ImageDecoder  1200      4     1
+17              0.0      931689         ImageDecoder     1      1     1
+18              0.0      940599         ImageDecoder  1000      1     1
+19              0.0      941447         ImageDecoder  1000      2     1
+20              0.0      945167         ImageDecoder  1000      8     1
+21              0.0      950086         ImageDecoder     1     16     1
+22              0.0      953025         ImageDecoder   500      4     1
+23              0.0      957078         ImageDecoder   500      2     1
+24              0.0      963522         ImageDecoder  1200     16     1
+25              0.0      983293         ImageDecoder     1      4     1
+26              0.1    20937165                 main  1000      4     1
+27              0.1    21679771                 main   500      1     1
+28              0.1    21962687                 main   500     16     1
+29              0.1    21987590                 main  1000      1     1
+30              0.1    22203364                 main  1200      1     1
+31              0.1    23410350                 main     1      2     1
+32              0.1    25080810                 main   500      8     1
+33              0.1    26139128                 main   500      4     1
+34              0.1    26630167                 main  1200      4     1
+35              0.1    26882069                 main     1      1     1
+36              0.1    26911697                 main  1200      2     1
+37              0.1    27354296                 main  1200      8     1
+38              0.1    27739053                 main  1000     16     1
+39              0.1    29295674                 main  1000      2     1
+40              0.1    29476891                 main     1      8     1
+41              0.1    29541017                 main  1200     16     1
+42              0.1    29545387                 main     1     16     1
+43              0.1    29778634                 main     1      4     1
+44              0.1    31291892                 main  1000      8     1
+45              0.1    32977066                 main   500      2     1
+46              0.2    59039226         nvjpeg_start   500      8     1
+47              0.2    59081028         nvjpeg_start  1000      1     1
+48              0.2    59086127         nvjpeg_start   500     16     1
+49              0.2    59292945         nvjpeg_start  1200      1     1
+50              0.1    59416883         nvjpeg_start     1      8     1
+51              0.2    59466165         nvjpeg_start  1200     16     1
+52              0.2    59608238         nvjpeg_start  1200      4     1
+53              0.2    59869797         nvjpeg_start   500      2     1
+54              0.2    59916513         nvjpeg_start  1000     16     1
+55              0.2    60166471         nvjpeg_start  1200      8     1
+56              0.1    60187986         nvjpeg_start     1     16     1
+57              0.2    60274600         nvjpeg_start   500      1     1
+58              0.2    60568955         nvjpeg_start  1000      4     1
+59              0.2    60607776         nvjpeg_start   500      4     1
+60              0.2    60812104         nvjpeg_start  1200      2     1
+61              0.2    60829718         nvjpeg_start  1000      8     1
+62              0.1    61167490         nvjpeg_start     1      2     1
+63              0.2    61641213         nvjpeg_start  1000      2     1
+64              0.2    87575475         nvjpeg_start     1      4     1
+65              0.2    92533275           GPU_decode  1000      8     1
+66              0.2    92910155           GPU_decode  1000      1     1
+67              0.3    93161211           GPU_decode   500      2     1
+68              0.2    93200621           GPU_decode  1000     16     1
+69              0.2    93727791           GPU_decode   500      1     1
+70              0.2    94021775           GPU_decode  1200      1     1
+71              0.2    94111980           GPU_decode  1200      4     1
+72              0.3    94272697           GPU_decode  1200     16     1
+73              0.3    95722459           GPU_decode   500     16     1
+74              0.3    96147320           GPU_decode  1200      8     1
+75              0.2    96158036           GPU_decode  1200      2     1
+76              0.3    96795230           GPU_decode  1000      4     1
+77              0.2    97401011           GPU_decode  1000      2     1
+78              0.2   101084626           GPU_decode     1     16     1
+79              0.2   103778025           GPU_decode     1      4     1
+80              0.3   105496351           GPU_decode   500      4     1
+81              0.3   105909489           GPU_decode     1      8     1
+82              0.2   106439730           GPU_decode     1      1     1
+83              0.2   106867239           GPU_decode     1      2     1
+84              0.3   109067469           GPU_decode   500      8     1
+85              0.4   162267896         nvjpeg_start     1      1     1
+86              0.4   163179615 malloc_output_buffer   500      2     1
+87              0.4   165622245 malloc_output_buffer   500      1     1
+88              0.4   165685386 malloc_output_buffer   500      4     1
+89              0.5   166605102 malloc_output_buffer   500      8     1
+90              0.5   167042700 malloc_output_buffer   500     16     1
+91              0.5   198493480   create_gpu_streams   500      2     1
+92              0.5   201717616   create_gpu_streams  1000      8     1
+93              0.6   207107775   create_gpu_streams  1200     16     1
+94              0.5   211463852   create_gpu_streams  1000      1     1
+95              0.6   214322808   create_gpu_streams   500      8     1
+96              0.6   214768580   create_gpu_streams  1200      2     1
+97              0.5   215939915   create_gpu_streams  1000      2     1
+98              0.6   216457558   create_gpu_streams  1000     16     1
+99              0.6   221678218   create_gpu_streams  1200      4     1
+100             0.6   222002502   create_gpu_streams  1200      1     1
+101             0.5   224387624   create_gpu_streams     1      1     1
+102             0.6   225875167   create_gpu_streams  1000      4     1
+103             0.6   230114626   create_gpu_streams     1     16     1
+104             0.6   230260902   create_gpu_streams   500     16     1
+105             0.6   230356520   create_gpu_streams   500      4     1
+106             0.5   232996764   create_gpu_streams     1      2     1
+107             0.6   233552187   create_gpu_streams  1200      8     1
+108             0.6   237129299   create_gpu_streams   500      1     1
+109             0.6   237161940   create_gpu_streams     1      8     1
+110             0.7   293899327       prepare_decode     1     16     1
+111             0.7   296383817       prepare_decode     1      2     1
+112             0.7   300291692       prepare_decode     1      8     1
+113             0.9   390502982       prepare_decode     1      1     1
+114             1.0   398711579 malloc_output_buffer  1000      8     1
+115             1.0   400011508 malloc_output_buffer  1000      2     1
+116             1.0   401794699 malloc_output_buffer  1000     16     1
+117             1.1   402689199 malloc_output_buffer  1000      4     1
+118             1.0   404128223 malloc_output_buffer  1000      1     1
+119             1.1   425102274       prepare_decode   500      2     1
+120             1.2   443510020       prepare_decode   500      8     1
+121             1.3   459817617       prepare_decode   500     16     1
+122             1.2   460216784       prepare_decode   500      4     1
+123             1.2   466484754       prepare_decode   500      1     1
+124             1.3   502177175  create_JPEG_streams  1200      4     1
+125             1.4   502234094  create_JPEG_streams   500      8     1
+126             1.3   502419124  create_JPEG_streams  1000     16     1
+127             1.3   507320255  create_JPEG_streams  1200      2     1
+128             1.4   510608985  create_JPEG_streams  1200      8     1
+129             1.3   511669182  create_JPEG_streams   500      1     1
+130             1.3   513248205  create_JPEG_streams  1000      8     1
+131             1.3   513297631 malloc_output_buffer  1200      1     1
+132             1.4   514292390 malloc_output_buffer  1200      4     1
+133             1.4   516051149  create_JPEG_streams  1200     16     1
+134             1.3   516161378 malloc_output_buffer  1200      2     1
+135             1.4   517364821 malloc_output_buffer  1200     16     1
+136             1.4   518060365 malloc_output_buffer  1200      8     1
+137             1.4   527629656  create_JPEG_streams   500      4     1
+138             1.4   528257474  create_JPEG_streams  1200      1     1
+139             1.5   545860256  create_JPEG_streams   500      2     1
+140             1.3   548693516  create_JPEG_streams     1      8     1
+141             1.2   549093553  create_JPEG_streams     1      4     1
+142             1.3   552444809  create_JPEG_streams     1     16     1
+143             1.3   555198188  create_JPEG_streams     1      1     1
+144             1.5   564289501  create_JPEG_streams   500     16     1
+145             1.5   567559570  create_JPEG_streams  1000      4     1
+146             1.3   572241631  create_JPEG_streams     1      2     1
+147             1.6   620046095  create_JPEG_streams  1000      2     1
+148             1.6   630470165             transfer  1000     16     1
+149             1.6   630914014  create_JPEG_streams  1000      1     1
+150             1.7   652423635             transfer  1200     16     1
+151             1.8   657672792             transfer   500      8     1
+152             1.8   657676823             transfer   500     16     1
+153             1.6   657859046             transfer  1000      8     1
+154             1.8   659586418             transfer  1200      8     1
+155             1.7   664314609       prepare_decode  1000      8     1
+156             1.7   678025716       prepare_decode  1000      1     1
+157             1.6   679530781             transfer     1     16     1
+158             1.7   680970726       prepare_decode  1000      2     1
+159             1.8   681691499       prepare_decode  1000     16     1
+160             1.8   686971293             transfer  1200      4     1
+161             1.7   690608579             transfer     1      8     1
+162             1.8   692349650       prepare_decode  1000      4     1
+163             1.5   697121022             transfer     1      4     1
+164             1.8   701455342             transfer  1000      4     1
+165             1.6   701593977             transfer     1      2     1
+166             1.9   706652487            batch_avg   500      2     1
+167             1.9   706723462            batch_avg   500      1     1
+168             1.9   706854750            batch_avg   500     16     1
+169             1.9   709483795            batch_avg   500      8     1
+170             1.9   710045392            batch_avg   500      4     1
+171             1.6   713641812             transfer     1      1     1
+172             1.9   720159771            batch_avg  1200     16     1
+173             1.9   720427094            batch_avg  1200      1     1
+174             1.9   724245110            batch_avg  1200      4     1
+175             1.8   727645956            batch_avg  1000      2     1
+176             2.0   728847952             transfer   500      4     1
+177             1.9   732834918            batch_avg  1000      1     1
+178             1.8   735658745            batch_avg  1000      8     1
+179             1.9   742006931            batch_avg  1000      4     1
+180             2.0   744402918            batch_avg  1200      8     1
+181             2.0   751619619            batch_avg  1200      2     1
+182             2.0   760537874            batch_avg  1000     16     1
+183             2.1   787450770       prepare_decode  1200     16     1
+184             2.1   794717958       prepare_decode  1200      2     1
+185             2.1   798330907       prepare_decode  1200      1     1
+186             2.1   798729685       prepare_decode  1200      4     1
+187             2.2   815147814       prepare_decode  1200      8     1
+188             2.0   821691006            batch_avg     1      8     1
+189             2.0   826638781            batch_avg     1     16     1
+190             2.0   858176610            batch_avg     1      2     1
+191             1.9   868678523            batch_avg     1      4     1
+192             2.0   877108830            batch_avg     1      1     1
+193             2.4   953140828             transfer  1000      2     1
+194             2.6   956653990             transfer   500      2     1
+195             2.5   963753070             transfer  1200      2     1
+196             3.5  1328901717             transfer   500      1     1
+197             3.4  1334669412             transfer  1000      1     1
+198             3.4  1340052086             transfer  1200      1     1
+199             4.7  2175142893   create_gpu_streams     1      4     1
+200             5.1  2348659247       prepare_decode     1      4     1
+201             9.8  3605147947   load_batch_to_host   500     16     1
+202             9.9  3681727460   load_batch_to_host   500      2     1
+203             9.7  3682194390   load_batch_to_host   500      1     1
+204            10.0  3724206605   load_batch_to_host  1200     16     1
+205            10.2  3733568910   load_batch_to_host   500      8     1
+206            10.1  3750909427   load_batch_to_host   500      4     1
+207            10.0  3767521928   load_batch_to_host  1200      8     1
+208             9.8  3812602697   load_batch_to_host  1200      1     1
+209            10.4  3903225838   load_batch_to_host  1200      4     1
+210            10.2  3973152594   load_batch_to_host  1000      1     1
+211            10.9  4203834926   load_batch_to_host  1200      2     1
+212            12.0  4566846511   load_batch_to_host  1000      4     1
+213            13.2  5105783722   load_batch_to_host  1000     16     1
+214            13.2  5407671954   load_batch_to_host     1      8     1
+215            13.5  5568643230   load_batch_to_host     1     16     1
+216            14.0  5593919352   load_batch_to_host  1000      2     1
+217            14.3  6632573294   load_batch_to_host     1      4     1
+218            16.6  6659228638   load_batch_to_host  1000      8     1
+219            18.0  7917690227   load_batch_to_host     1      1     1
+220            18.2  7952962967   load_batch_to_host     1      2     1
+221            37.7 14654313618          HOST_decode  1200      1     1
+222            39.2 14656957924          HOST_decode  1200     16     1
+223            37.7 14659865908          HOST_decode  1000      1     1
+224            38.4 14661667029          HOST_decode  1000      4     1
+225            39.9 14662215328          HOST_decode   500      8     1
+226            38.1 14664648741          HOST_decode  1200      2     1
+227            39.4 14665458529          HOST_decode   500      2     1
+228            40.0 14668294997          HOST_decode   500     16     1
+229            39.0 14678755982          HOST_decode  1200      4     1
+230            36.6 14679089651          HOST_decode  1000      8     1
+231            39.1 14679227603          HOST_decode  1200      8     1
+232            36.9 14688095550          HOST_decode  1000      2     1
+233            38.6 14701817607          HOST_decode   500      1     1
+234            39.7 14709731824          HOST_decode   500      4     1
+235            38.1 14728011608          HOST_decode  1000     16     1
+236            41.2 15409412616         decode_batch  1200     16     1
+237            42.1 15428099913         decode_batch   500     16     1
+238            42.0 15435261884         decode_batch   500      8     1
+239            38.5 15435848759         decode_batch  1000      8     1
+240            41.1 15441774528         decode_batch  1200      8     1
+241            40.0 15458164246         decode_batch  1000     16     1
+242            40.5 15465747731         decode_batch  1000      4     1
+243            41.0 15466330128         decode_batch  1200      4     1
+244            42.0 15551120843         decode_batch   500      4     1
+245            42.2 15721355621         decode_batch   500      2     1
+246            40.8 15730614591         decode_batch  1200      2     1
+247            39.5 15745348515         decode_batch  1000      2     1
+248            39.0 16020129951          HOST_decode     1      8     1
+249            38.9 16025626595          HOST_decode     1     16     1
+250            34.6 16055648886          HOST_decode     1      4     1
+251            36.7 16061816928          HOST_decode     1      2     1
+252            41.4 16093200325         decode_batch  1000      1     1
+253            41.4 16094424316         decode_batch  1200      1     1
+254            36.6 16115015123          HOST_decode     1      1     1
+255            42.3 16130521818         decode_batch   500      1     1
+256            40.8 16816384776         decode_batch     1     16     1
+257            41.0 16827081578         decode_batch     1      8     1
+258            36.3 16867271644         decode_batch     1      4     1
+259            38.6 16880756239         decode_batch     1      2     1
+260            38.5 16945888603         decode_batch     1      1     1
+#+end_example
+

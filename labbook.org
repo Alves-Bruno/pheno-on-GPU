@@ -2976,7 +2976,6 @@ df.16 %>%
 #+RESULTS:
 [[file:~/R-images/image-Gantt_chart.png]]
 
-
 * Traces with nsys
 ** Run tests
 #+begin_src bash
@@ -3011,7 +3010,6 @@ sudo /sbin/sysctl vm.drop_caches=3
 | traces/report6.qdrep |        500 |         1500 |         4 |
 |----------------------+------------+--------------+-----------|
 
-
 * nvJPEG with Decoupled phases 
 - Below is the sequence of API calls to decode a single image
   1. Initialize all the items that are used in the decoding process:
@@ -3039,3 +3037,25 @@ sudo /sbin/sysctl vm.drop_caches=3
              nvjpegDecodeJpegHost()
              nvjpegDecodeJpegTransferToDevice()
              nvjpegDecodeJpegDevice()
+
+
+* Projeto código final 
+- main
+- gpu_decode.h
+- gpu_decode.cu
+
+process_on_GPU():
+args: vetor de string com os path das imagens
+return: vetor com as médias de cada canal
+
+Etapas da process_on_GPU():
+- Start nvjpeg structs
+- create GPU streams
+- load images into memory
+- allocate output structs
+- DecodeHost
+- TransferToDevice
+- DecodeDevice
+- Average values with Thrust
+- Free GPU memory
+- delete GPU streams

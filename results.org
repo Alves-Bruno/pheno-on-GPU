@@ -1,0 +1,328 @@
+* Load library
+#+begin_src R :results output :exports both :session *R-local*
+options(crayon.enabled=FALSE)
+library("tidyverse")
+#+end_src
+
+#+RESULTS:
+
+* RGB values 
+** Average values
+*** Read CSV
+#+begin_src R :results output :exports both :session *R-local*
+read_csv("./rgb_values/CPU_avg_values.csv", show_col_types = FALSE) %>% 
+  as_tibble() -> CPU.avg
+
+read_csv("./rgb_values/GPU_avg_values.csv", show_col_types = FALSE) %>% 
+  as_tibble() -> GPU.avg
+
+CPU.avg
+GPU.avg
+
+#+end_src
+
+#+RESULTS:
+#+begin_example
+indexing CPU_avg_values.csv [===============================] 2.35GB/s, eta:  0s
+indexing GPU_avg_values.csv [===============================] 1.73GB/s, eta:  0s
+# A tibble: 500 × 5
+   image_id image_name                      R     G     B
+      <
+<
+                      <
+<
+<dbl>
+ 1        0 /tmp/2020/2020_008_13_4.jpg  95.1  91.4  85.2
+ 2        1 /tmp/2020/2020_001_16_2.jpg  95.1  92.2  86.0
+ 3        2 /tmp/2020/2020_012_06_2.jpg 102.   97.9 106. 
+ 4        3 /tmp/2020/2020_022_12_2.jpg  90.0  86.4  81.7
+ 5        4 /tmp/2020/2020_049_17_2.jpg  95.2  89.0  80.8
+ 6        5 /tmp/2020/2020_019_12_4.jpg  92.0  88.4  82.9
+ 7        6 /tmp/2020/2020_036_16_4.jpg  93.0  89.1  84.3
+ 8        7 /tmp/2020/2020_015_11_2.jpg  89.2  84.8  78.8
+ 9        8 /tmp/2020/2020_018_15_4.jpg  95.6  92.1  87.0
+10        9 /tmp/2020/2020_037_17_4.jpg  93.7  90.6  85.9
+# … with 490 more rows
+# A tibble: 500 × 5
+   image_id image_name                      R     G     B
+      <
+<
+                      <
+<
+<dbl>
+ 1        0 /tmp/2020/2020_008_13_4.jpg  94.8  91.1  84.8
+ 2        1 /tmp/2020/2020_001_16_2.jpg  94.8  91.8  85.6
+ 3        2 /tmp/2020/2020_012_06_2.jpg 101.   97.6 106. 
+ 4        3 /tmp/2020/2020_022_12_2.jpg  89.7  86.0  81.3
+ 5        4 /tmp/2020/2020_049_17_2.jpg  94.9  88.7  80.4
+ 6        5 /tmp/2020/2020_019_12_4.jpg  91.6  88.1  82.6
+ 7        6 /tmp/2020/2020_036_16_4.jpg  92.7  88.7  83.9
+ 8        7 /tmp/2020/2020_015_11_2.jpg  88.8  84.4  78.4
+ 9        8 /tmp/2020/2020_018_15_4.jpg  95.2  91.8  86.6
+10        9 /tmp/2020/2020_037_17_4.jpg  93.4  90.3  85.5
+# … with 490 more rows
+#+end_example
+
+*** Plot R,G,B avg values
+#+begin_src R :results output file graphics :file (concat "~/R-images/image-" (replace-regexp-in-string " " "_" (nth 4 (org-heading-components))) ".png") :exports both :width 600 :height 400 :session *R-local*
+GPU.avg %>%
+  rename(
+    R.gpu = R,
+    G.gpu = G,
+    B.gpu = B,
+  ) %>%
+  left_join(
+    CPU.avg %>%
+     rename(
+      R.cpu = R,
+      G.cpu = G,
+      B.cpu = B,
+    ),
+    by = c("image_id", "image_name")
+  ) %>%
+  ggplot() + 
+  geom_point(aes(x=image_id, y=R.cpu), color="red") +  
+  geom_point(aes(x=image_id, y=R.gpu), color="black")   
+
+
+#+end_src
+
+#+RESULTS:
+[[file:~/R-images/image-Plot_R,G,B_avg_values.png]]
+
+*** Calculate diff
+#+begin_src R :results output :exports both :session *R-local*
+GPU.avg %>%
+  rename(
+    R.gpu = R,
+    G.gpu = G,
+    B.gpu = B,
+  ) %>%
+  left_join(
+    CPU.avg %>%
+     rename(
+      R.cpu = R,
+      G.cpu = G,
+      B.cpu = B,
+    ),
+    by = c("image_id", "image_name")
+  ) %>%
+  mutate(
+    R.diff = R.gpu - R.cpu,
+    G.diff = G.gpu - G.cpu,
+    B.diff = B.gpu - B.cpu,
+  ) %>%
+  select(-ends_with("gpu"), -ends_with("cpu")) %>%
+  pivot_longer(
+        cols = ends_with("diff"),
+        names_to = "channel",
+        values_to = "diff",
+  ) -> diff.df
+#+end_src
+
+#+RESULTS:
+
+*** CPU GPU avg diff 
+#+begin_src R :results output file graphics :file (concat "~/R-images/image-" (replace-regexp-in-string " " "_" (nth 4 (org-heading-components))) ".png") :exports both :width 600 :height 400 :session *R-local*
+
+diff.df %>%
+  ggplot() +
+  geom_point(aes(x=image_id, y=diff, colour=channel))
+#+end_src
+
+#+RESULTS:
+[[file:~/R-images/image-CPU_GPU_avg_diff.png]]
+
+** Pixel values
+*** Read CSV
+#+begin_src R :results output :exports both :session *R-local*
+read_csv("./rgb_values/CPU_pixel_values.csv", show_col_types = FALSE) %>% 
+  as_tibble() -> CPU.pixel
+
+read_csv("./rgb_values/GPU_pixel_values.csv", show_col_types = FALSE) %>% 
+  as_tibble() -> GPU.pixel
+
+CPU.pixel
+GPU.pixel
+#+end_src
+
+#+RESULTS:
+#+begin_example
+indexing CPU_pixel_values.csv [---------------------------] 415.23GB/s, eta:  0sindexing CPU_pixel_values.csv [==-------------------------] 165.84MB/s, eta:  3sindexing CPU_pixel_values.csv [===------------------------] 172.98MB/s, eta:  3sindexing CPU_pixel_values.csv [===------------------------] 179.80MB/s, eta:  3sindexing CPU_pixel_values.csv [====-----------------------] 150.40MB/s, eta:  4sindexing CPU_pixel_values.csv [====-----------------------] 158.16MB/s, eta:  3sindexing CPU_pixel_values.csv [====-----------------------] 164.80MB/s, eta:  3sindexing CPU_pixel_values.csv [=====----------------------] 143.18MB/s, eta:  4sindexing CPU_pixel_values.csv [=====----------------------] 148.09MB/s, eta:  3sindexing CPU_pixel_values.csv [=====----------------------] 154.01MB/s, eta:  3sindexing CPU_pixel_values.csv [=====----------------------] 157.87MB/s, eta:  3sindexing CPU_pixel_values.csv [======---------------------] 136.77MB/s, eta:  4sindexing CPU_pixel_values.csv [======---------------------] 141.65MB/s, eta:  3sindexing CPU_pixel_values.csv [======---------------------] 151.16MB/s, eta:  3sindexing CPU_pixel_values.csv [=======--------------------] 133.67MB/s, eta:  3sindexing CPU_pixel_values.csv [=======--------------------] 136.43MB/s, eta:  3sindexing CPU_pixel_values.csv [========-------------------] 135.62MB/s, eta:  3sindexing CPU_pixel_values.csv [========-------------------] 122.68MB/s, eta:  4sindexing CPU_pixel_values.csv [========-------------------] 128.40MB/s, eta:  3sindexing CPU_pixel_values.csv [=========------------------] 129.12MB/s, eta:  3sindexing CPU_pixel_values.csv [=========------------------] 126.03MB/s, eta:  3sindexing CPU_pixel_values.csv [=========------------------] 125.52MB/s, eta:  3sindexing CPU_pixel_values.csv [==========-----------------] 130.01MB/s, eta:  3sindexing CPU_pixel_values.csv [==========-----------------] 125.21MB/s, eta:  3sindexing CPU_pixel_values.csv [==========-----------------] 124.78MB/s, eta:  3sindexing CPU_pixel_values.csv [===========----------------] 128.02MB/s, eta:  3sindexing CPU_pixel_values.csv [===========----------------] 126.79MB/s, eta:  3sindexing CPU_pixel_values.csv [===========----------------] 125.43MB/s, eta:  3sindexing CPU_pixel_values.csv [============---------------] 127.63MB/s, eta:  3sindexing CPU_pixel_values.csv [============---------------] 127.57MB/s, eta:  3sindexing CPU_pixel_values.csv [============---------------] 126.99MB/s, eta:  3sindexing CPU_pixel_values.csv [============---------------] 126.85MB/s, eta:  3sindexing CPU_pixel_values.csv [=============--------------] 127.67MB/s, eta:  3sindexing CPU_pixel_values.csv [=============--------------] 127.45MB/s, eta:  3sindexing CPU_pixel_values.csv [=============--------------] 127.26MB/s, eta:  2sindexing CPU_pixel_values.csv [==============-------------] 126.64MB/s, eta:  2sindexing CPU_pixel_values.csv [==============-------------] 127.91MB/s, eta:  2sindexing CPU_pixel_values.csv [==============-------------] 126.71MB/s, eta:  2sindexing CPU_pixel_values.csv [==============-------------] 128.09MB/s, eta:  2sindexing CPU_pixel_values.csv [===============------------] 125.73MB/s, eta:  2sindexing CPU_pixel_values.csv [===============------------] 126.38MB/s, eta:  2sindexing CPU_pixel_values.csv [===============------------] 125.94MB/s, eta:  2sindexing CPU_pixel_values.csv [===============------------] 125.21MB/s, eta:  2sindexing CPU_pixel_values.csv [================-----------] 124.12MB/s, eta:  2sindexing CPU_pixel_values.csv [================-----------] 124.58MB/s, eta:  2sindexing CPU_pixel_values.csv [================-----------] 125.67MB/s, eta:  2sindexing CPU_pixel_values.csv [=================----------] 123.68MB/s, eta:  2sindexing CPU_pixel_values.csv [=================----------] 125.79MB/s, eta:  2sindexing CPU_pixel_values.csv [==================---------] 126.02MB/s, eta:  2sindexing CPU_pixel_values.csv [==================---------] 124.03MB/s, eta:  2sindexing CPU_pixel_values.csv [==================---------] 126.01MB/s, eta:  2sindexing CPU_pixel_values.csv [===================--------] 126.25MB/s, eta:  2sindexing CPU_pixel_values.csv [===================--------] 124.98MB/s, eta:  1sindexing CPU_pixel_values.csv [===================--------] 125.88MB/s, eta:  1sindexing CPU_pixel_values.csv [===================--------] 125.36MB/s, eta:  1sindexing CPU_pixel_values.csv [====================-------] 126.63MB/s, eta:  1sindexing CPU_pixel_values.csv [====================-------] 124.89MB/s, eta:  1sindexing CPU_pixel_values.csv [====================-------] 125.67MB/s, eta:  1sindexing CPU_pixel_values.csv [=====================------] 124.74MB/s, eta:  1sindexing CPU_pixel_values.csv [=====================------] 124.64MB/s, eta:  1sindexing CPU_pixel_values.csv [=====================------] 121.54MB/s, eta:  1sindexing CPU_pixel_values.csv [=====================------] 122.42MB/s, eta:  1sindexing CPU_pixel_values.csv [======================-----] 122.61MB/s, eta:  1sindexing CPU_pixel_values.csv [======================-----] 120.60MB/s, eta:  1sindexing CPU_pixel_values.csv [=======================----] 122.96MB/s, eta:  1sindexing CPU_pixel_values.csv [=======================----] 121.87MB/s, eta:  1sindexing CPU_pixel_values.csv [=======================----] 119.92MB/s, eta:  1sindexing CPU_pixel_values.csv [========================---] 122.42MB/s, eta:  1sindexing CPU_pixel_values.csv [========================---] 121.69MB/s, eta:  1sindexing CPU_pixel_values.csv [========================---] 119.69MB/s, eta:  1sindexing CPU_pixel_values.csv [=========================--] 120.67MB/s, eta:  0sindexing CPU_pixel_values.csv [=========================--] 121.69MB/s, eta:  0sindexing CPU_pixel_values.csv [=========================--] 118.84MB/s, eta:  0sindexing CPU_pixel_values.csv [==========================-] 119.67MB/s, eta:  0sindexing CPU_pixel_values.csv [==========================-] 121.04MB/s, eta:  0sindexing CPU_pixel_values.csv [==========================-] 119.04MB/s, eta:  0sindexing CPU_pixel_values.csv [===========================] 121.11MB/s, eta:  0s
+indexing GPU_pixel_values.csv [---------------------------] 443.17GB/s, eta:  0sindexing GPU_pixel_values.csv [=--------------------------] 134.94MB/s, eta:  4sindexing GPU_pixel_values.csv [==-------------------------] 155.00MB/s, eta:  4sindexing GPU_pixel_values.csv [==-------------------------] 162.35MB/s, eta:  4sindexing GPU_pixel_values.csv [==-------------------------] 171.61MB/s, eta:  3sindexing GPU_pixel_values.csv [==-------------------------] 126.66MB/s, eta:  4sindexing GPU_pixel_values.csv [===------------------------] 146.00MB/s, eta:  4sindexing GPU_pixel_values.csv [===------------------------] 140.76MB/s, eta:  4sindexing GPU_pixel_values.csv [====-----------------------] 115.52MB/s, eta:  5sindexing GPU_pixel_values.csv [====-----------------------] 127.48MB/s, eta:  4sindexing GPU_pixel_values.csv [====-----------------------] 124.50MB/s, eta:  4sindexing GPU_pixel_values.csv [=====----------------------] 117.52MB/s, eta:  4sindexing GPU_pixel_values.csv [=====----------------------] 122.63MB/s, eta:  4sindexing GPU_pixel_values.csv [======---------------------] 118.70MB/s, eta:  4sindexing GPU_pixel_values.csv [======---------------------] 126.12MB/s, eta:  4sindexing GPU_pixel_values.csv [======---------------------] 116.73MB/s, eta:  4sindexing GPU_pixel_values.csv [=======--------------------] 116.38MB/s, eta:  4sindexing GPU_pixel_values.csv [=======--------------------] 119.42MB/s, eta:  4sindexing GPU_pixel_values.csv [========-------------------] 114.82MB/s, eta:  4sindexing GPU_pixel_values.csv [========-------------------] 116.11MB/s, eta:  4sindexing GPU_pixel_values.csv [=========------------------] 112.78MB/s, eta:  4sindexing GPU_pixel_values.csv [=========------------------] 118.86MB/s, eta:  3sindexing GPU_pixel_values.csv [==========-----------------] 113.73MB/s, eta:  4sindexing GPU_pixel_values.csv [==========-----------------] 118.76MB/s, eta:  3sindexing GPU_pixel_values.csv [===========----------------] 112.63MB/s, eta:  3sindexing GPU_pixel_values.csv [===========----------------] 114.73MB/s, eta:  3sindexing GPU_pixel_values.csv [===========----------------] 116.04MB/s, eta:  3sindexing GPU_pixel_values.csv [============---------------] 117.91MB/s, eta:  3sindexing GPU_pixel_values.csv [============---------------] 112.72MB/s, eta:  3sindexing GPU_pixel_values.csv [============---------------] 114.81MB/s, eta:  3sindexing GPU_pixel_values.csv [============---------------] 115.95MB/s, eta:  3sindexing GPU_pixel_values.csv [=============--------------] 116.18MB/s, eta:  3sindexing GPU_pixel_values.csv [=============--------------] 112.35MB/s, eta:  3sindexing GPU_pixel_values.csv [=============--------------] 114.20MB/s, eta:  3sindexing GPU_pixel_values.csv [==============-------------] 115.25MB/s, eta:  3sindexing GPU_pixel_values.csv [==============-------------] 114.46MB/s, eta:  3sindexing GPU_pixel_values.csv [==============-------------] 112.78MB/s, eta:  3sindexing GPU_pixel_values.csv [==============-------------] 114.47MB/s, eta:  3sindexing GPU_pixel_values.csv [===============------------] 115.68MB/s, eta:  2sindexing GPU_pixel_values.csv [===============------------] 112.61MB/s, eta:  2sindexing GPU_pixel_values.csv [===============------------] 112.40MB/s, eta:  2sindexing GPU_pixel_values.csv [===============------------] 113.93MB/s, eta:  2sindexing GPU_pixel_values.csv [================-----------] 114.80MB/s, eta:  2sindexing GPU_pixel_values.csv [================-----------] 110.65MB/s, eta:  2sindexing GPU_pixel_values.csv [================-----------] 111.58MB/s, eta:  2sindexing GPU_pixel_values.csv [=================----------] 112.90MB/s, eta:  2sindexing GPU_pixel_values.csv [=================----------] 110.83MB/s, eta:  2sindexing GPU_pixel_values.csv [=================----------] 112.14MB/s, eta:  2sindexing GPU_pixel_values.csv [==================---------] 114.30MB/s, eta:  2sindexing GPU_pixel_values.csv [==================---------] 111.56MB/s, eta:  2sindexing GPU_pixel_values.csv [==================---------] 112.52MB/s, eta:  2sindexing GPU_pixel_values.csv [===================--------] 113.47MB/s, eta:  2sindexing GPU_pixel_values.csv [===================--------] 114.20MB/s, eta:  2sindexing GPU_pixel_values.csv [===================--------] 111.75MB/s, eta:  2sindexing GPU_pixel_values.csv [====================-------] 112.77MB/s, eta:  1sindexing GPU_pixel_values.csv [====================-------] 111.50MB/s, eta:  1sindexing GPU_pixel_values.csv [=====================------] 112.67MB/s, eta:  1sindexing GPU_pixel_values.csv [=====================------] 112.12MB/s, eta:  1sindexing GPU_pixel_values.csv [=====================------] 113.07MB/s, eta:  1sindexing GPU_pixel_values.csv [=====================------] 111.71MB/s, eta:  1sindexing GPU_pixel_values.csv [======================-----] 112.34MB/s, eta:  1sindexing GPU_pixel_values.csv [======================-----] 112.79MB/s, eta:  1sindexing GPU_pixel_values.csv [======================-----] 112.21MB/s, eta:  1sindexing GPU_pixel_values.csv [=======================----] 113.15MB/s, eta:  1sindexing GPU_pixel_values.csv [=======================----] 112.32MB/s, eta:  1sindexing GPU_pixel_values.csv [=======================----] 112.02MB/s, eta:  1sindexing GPU_pixel_values.csv [=======================----] 112.30MB/s, eta:  1sindexing GPU_pixel_values.csv [========================---] 113.05MB/s, eta:  1sindexing GPU_pixel_values.csv [========================---] 112.64MB/s, eta:  1sindexing GPU_pixel_values.csv [========================---] 111.27MB/s, eta:  1sindexing GPU_pixel_values.csv [=========================--] 112.25MB/s, eta:  0sindexing GPU_pixel_values.csv [=========================--] 112.21MB/s, eta:  0sindexing GPU_pixel_values.csv [=========================--] 111.26MB/s, eta:  0sindexing GPU_pixel_values.csv [==========================-] 111.97MB/s, eta:  0sindexing GPU_pixel_values.csv [==========================-] 112.74MB/s, eta:  0sindexing GPU_pixel_values.csv [==========================-] 112.23MB/s, eta:  0sindexing GPU_pixel_values.csv [==========================-] 112.53MB/s, eta:  0sindexing GPU_pixel_values.csv [===========================] 110.76MB/s, eta:  0sindexing GPU_pixel_values.csv [===========================] 108.88MB/s, eta:  0s
+# A tibble: 24,576,000 × 6
+   image_id     x     y     R     G     B
+      <
+<
+<
+<
+<
+<dbl>
+ 1        0     0     0     0     0     0
+ 2        0     0     1     0     0     0
+ 3        0     0     2     0     0     0
+ 4        0     0     3     0     0     0
+ 5        0     0     4     0     0     0
+ 6        0     0     5     0     0     0
+ 7        0     0     6     0     0     0
+ 8        0     0     7     0     0     0
+ 9        0     0     8     0     0     0
+10        0     0     9     0     0     0
+# … with 24,575,990 more rows
+# A tibble: 24,576,000 × 6
+   image_id     x     y     R     G     B
+      <
+<
+<
+<
+<
+<dbl>
+ 1        0     0     0     0     0     0
+ 2        0     0     1     0     0     0
+ 3        0     0     2     0     0     0
+ 4        0     0     3     0     0     0
+ 5        0     0     4     0     0     0
+ 6        0     0     5     0     0     0
+ 7        0     0     6     0     0     0
+ 8        0     0     7     0     0     0
+ 9        0     0     8     0     0     0
+10        0     0     9     0     0     0
+# … with 24,575,990 more rows
+#+end_example
+
+*** Calculate diff R,G,B pixel values
+#+begin_src R :results output :exports both :session *R-local*
+CPU.pixel %>%
+  filter(image_id == 0) %>%
+  left_join(
+    GPU.pixel %>%
+      filter(image_id == 0),
+    by=c("image_id", "x", "y")
+  ) %>%
+  mutate(
+    R.diff = R.x - R.y,
+    G.diff = G.x - G.y,
+    B.diff = B.x - B.y,
+  ) %>% 
+  pivot_longer(
+        cols = ends_with("diff"),
+        names_to = "channel",
+        values_to = "diff",
+  ) -> pixel.diff
+#+end_src
+
+#+RESULTS:
+
+*** Reduce dataframe size
+#+begin_src R :results output :exports both :session *R-local*
+pixel.diff %>%
+#  filter(x %in% seq(1, 2000, 10)) %>%
+  filter(y %in% seq(1, 2000, 10)) -> pixel.diff.reduced
+
+#+end_src
+
+#+RESULTS:
+
+*** CPU GPU pixel diff plot
+#+begin_src R :results output file graphics :file (concat "~/R-images/image-" (replace-regexp-in-string " " "_" (nth 4 (org-heading-components))) ".png") :exports both :width 1000 :height 600 :session *R-local*
+#pixel.diff %>%
+pixel.diff.reduced %>%
+  filter(between(diff, -10, 10)) %>%
+  mutate(diff.signal = if_else(diff > 0, "+", "-")) %>%
+  ggplot(aes(x=x, y=y)) +
+  theme_bw(base_size = 16) + 
+  geom_tile(aes(colour=diff, fill=diff)) +
+  scale_colour_gradient2() +
+  scale_fill_gradient2() +
+  theme(
+#    panel.spacing=unit(0.4, "lines"),
+#    panel.margin=unit(0.4, "lines"),
+    panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank()
+  ) +
+  facet_grid(diff.signal~channel) #+
+#  theme(legend.position = "none")
+#+end_src
+
+#+RESULTS:
+[[file:~/R-images/image-CPU_GPU_pixel_diff_plot.png]]
+
+
+* Traces 
+** Read CPU traces
+#+begin_src R :results output :exports both :session *R-local*
+n_images <- 5000
+
+CPU.traces <- tibble() 
+
+for(do_it_again in seq(1, 1, 1)){
+  for(thread in c(2 ** seq(0, 4))){
+      out_report_name <- paste("CPU", thread, n_images, do_it_again, sep="_")
+      print(out_report_name)
+      CPU.traces <- bind_rows(CPU.traces, CPU.traces %>% mutate(thread = thread))
+  }
+}
+
+#+end_src
+
+#+RESULTS:
+: [1] "CPU_1_5000_1"
+: [1] "CPU_2_5000_1"
+: [1] "CPU_4_5000_1"
+: [1] "CPU_8_5000_1"
+: [1] "CPU_16_5000_1"
+
+** Read GPU traces
+#+begin_src R :results output :exports both :session *R-local*
+n_images <- 5000
+
+GPU.traces <- tibble() 
+#for(do_it_again in seq(1, 10, 1)){
+for(do_it_again in seq(1, 1, 1)){    
+    for(batch in c(1, 500, 1000, 1200)){
+        for(stream in c(2 ** seq(0, 4))){
+        out_report_name <- paste("./traces/GPU", batch, n_images, stream, do_it_again, sep="_")
+        print(out_report_name)
+        
+        t <- as_tibble(read_csv(paste0(out_report_name, ".csv")))     
+
+        GPU.traces %>%
+          bind_rows(
+            GPU.traces, 
+              t %>% 
+                mutate(
+                  batch = batch,
+                  stream = stream,
+                  do_it_again = do_it_again
+                )
+          )
+        }
+    }        
+}
+
+#+end_src
+
+#+RESULTS:
+#+begin_example
+[1] "GPU_1_5000_1_1"
+[1] "GPU_1_5000_2_1"
+[1] "GPU_1_5000_4_1"
+[1] "GPU_1_5000_8_1"
+[1] "GPU_1_5000_16_1"
+[1] "GPU_500_5000_1_1"
+[1] "GPU_500_5000_2_1"
+[1] "GPU_500_5000_4_1"
+[1] "GPU_500_5000_8_1"
+[1] "GPU_500_5000_16_1"
+[1] "GPU_1000_5000_1_1"
+[1] "GPU_1000_5000_2_1"
+[1] "GPU_1000_5000_4_1"
+[1] "GPU_1000_5000_8_1"
+[1] "GPU_1000_5000_16_1"
+[1] "GPU_1200_5000_1_1"
+[1] "GPU_1200_5000_2_1"
+[1] "GPU_1200_5000_4_1"
+[1] "GPU_1200_5000_8_1"
+[1] "GPU_1200_5000_16_1"
+#+end_example
+

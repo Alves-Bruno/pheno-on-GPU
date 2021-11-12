@@ -126,12 +126,21 @@ int main(int argc, char *argv[]){
 			1,
 			jpeg_stream);
 
+  /*  nvjpegDecodeParamsSetROI(
+        decode_params,
+	0, 
+	0, 
+	-1, 
+	-1);*/ 	
+  
   nvjpegImage_t output;
 
   int widths[NVJPEG_MAX_COMPONENT];
   int heights[NVJPEG_MAX_COMPONENT];
   int channels;
   nvjpegChromaSubsampling_t subsampling;
+
+  std::cout << " NVJPEG_MAX_COMPONENT" << NVJPEG_MAX_COMPONENT << std::endl;
 
   nvjpegGetImageInfo(
         handle, jpg, size,
@@ -140,7 +149,9 @@ int main(int argc, char *argv[]){
   for (int c = 0; c < channels; c++) {
     std::cout << "Channel #" << c << " size: " << widths[c] << " x "
 	      << heights[c] << std::endl;
-  } 
+  }
+  std::cout << "N canais: " << NVJPEG_MAX_COMPONENT << std::endl;
+  
 
   switch (subsampling) {
   case NVJPEG_CSS_444:
@@ -175,6 +186,7 @@ int main(int argc, char *argv[]){
   std::cout << "buffer_size: " << buffer_size << std::endl;
   
   for(int i=0; i<3; i++){
+    output.pitch[i] = buffer_width;
     auto malloc_state = cudaMalloc(&output.channel[i], buffer_size);
     if(malloc_state != cudaSuccess){
       std::cout << "CudaMalloc error(" << cudaGetErrorString(malloc_state) <<  std::endl;

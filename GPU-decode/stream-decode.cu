@@ -312,7 +312,7 @@ class ImageDecoder {
 			      0,
 			      0,
 			      jpeg_streams[in_batch]);
-	std::cout << "buffer_image_size: " << buffer_images_sizes[in_batch] << " bytes." << std::endl;
+	//std::cout << "buffer_image_size: " << buffer_images_sizes[in_batch] << " bytes." << std::endl;
       }
 
       // Create the device output buffers assuming that all images have the same size
@@ -334,24 +334,25 @@ class ImageDecoder {
 			 buffer_images_sizes[in_batch],
 			 &nComponents, &subsampling, Awidths, Aheights);
 	  
-	  std::cout << "widths[0]: " << Awidths[0] << std::endl;
-	  std::cout << "heights[0]: " << Aheights[0] << std::endl;
+	  //std::cout << "widths[0]: " << Awidths[0] << std::endl;
+	  //std::cout << "heights[0]: " << Aheights[0] << std::endl;
       
 	  for(int channel = 0; channel < components_num; channel++){
 	    unsigned int width;
-	    unsigned int height;    
+	    unsigned int height;
 	    nvjpegJpegStreamGetComponentDimensions(
 						   jpeg_streams[0],
 						   0,
 						   &width,
 						   &height
 						   );
-	    std::cout << "width: " << width << std::endl;
-	    std::cout << "heigth: " << height << std::endl;
+	    //std::cout << "width: " << width << std::endl;
+	    //std::cout << "heigth: " << height << std::endl;
 
 	    this->images_width = width;
 	    this->images_height = height;
-	    
+
+	    device_output_buffer[in_batch].pitch[channel] = width;
 	    auto malloc_state = cudaMalloc((void**) &(device_output_buffer[in_batch].channel[channel]), sizeof(unsigned char) * width*height);
 	    if(malloc_state != cudaSuccess){
 	      std::cout << "CudaMalloc error(" << cudaGetErrorString(malloc_state) <<  std::endl;
@@ -411,7 +412,8 @@ class ImageDecoder {
       nvtxRangePop();
       nvtxRangePop();
 
-      cudaDeviceSynchronize();
+      /*
+	cudaDeviceSynchronize();
       // for end
       for(int in_batch = 0; in_batch < this->batch_size; in_batch++){
 	for(int c=0; c<3 ; c++){
@@ -425,25 +427,26 @@ class ImageDecoder {
 	      std::cout << (int)bruno << ":";
 	      std::cout << (int)values[bruno] << std::endl;
 
-	  } std::cout << std::endl;
+	      } std::cout << std::endl;
 	  
-	  /*//std::cout << (this->images_width*this->images_height) << std::endl;
+	  //std::cout << (this->images_width*this->images_height) << std::endl;
 	  thrust::device_ptr<unsigned char> channel((unsigned char*) device_output_buffer[in_batch].channel[c]);
 	  
 	  //	  channel_avg[(in_batch*3) + c] = thrust::reduce(
 	  int channel_sum = thrust::reduce(
 			      channel, // Vector start
-			      channel + (this->images_width), // Vector end 
+			      channel + (this->images_width*this->images_height), // Vector end 
 			      (int) 0, // reduce first value
 			      thrust::plus<int>()); // reduce operation
 
 	  cudaDeviceSynchronize();
-	  std::cout << "SUM: " << channel_sum << std::endl;*/
+	  std::cout << "SUM: " << channel_sum << std::endl;
+	  std::cout << "AVG: " << channel_sum / (float) (this->images_width*this->images_height) << std::endl;
 	  
 	  //	  std::cout << "SUM: " << channel_avg[(in_batch*3) + c] << std::endl;
 	  //	  std::cout << "AVG: " << channel_avg[(in_batch*3) + c] / (float) (this->images_width*this->images_height) << std::endl;
 	}
-      }
+      }*/
 
     }
 
