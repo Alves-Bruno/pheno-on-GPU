@@ -51,8 +51,8 @@ int main(int argc, char *argv[]){
 	     avg_values[(i*3)+2]);
     }
   }
-
-  cudaDeviceSynchronize();
+  //cudaDeviceSynchronize();
+  nvtxRangePop();
   return(0);
 
 }
@@ -113,6 +113,5 @@ int readInput(const std::string &sInputPath, std::vector<std::string> &filelist)
         std::cout << "Cannot find input path " << sInputPath << std::endl;
         return error_code;
     }
-    nvtxRangePop();
     return 0;
 }

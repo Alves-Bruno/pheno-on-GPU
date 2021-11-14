@@ -98,9 +98,9 @@ void ImageDecoder::load_batch_to_host(
 {
   nvtxRangePush(__FUNCTION__);
 
-#pragma omp parallel default(shared)
-{
-#pragma omp for schedule(static)
+  //#pragma omp parallel default(shared)
+  //{
+  //#pragma omp for schedule(static)
   for(int i = 0; i < n_images; i++){
 
     FILE* file = fopen(this->images_path[start + i].c_str(), "rb");
@@ -125,7 +125,7 @@ void ImageDecoder::load_batch_to_host(
   //}
  
  }
-}
+  //}
   nvtxRangePop();
 }
 
